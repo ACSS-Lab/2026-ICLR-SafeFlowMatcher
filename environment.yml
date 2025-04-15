@@ -1,0 +1,30 @@
+name: safe_cfm
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.9
+  - pip
+  - patchelf
+  - ffmpeg
+  - pip:
+      - numpy
+      - matplotlib==3.3.4
+      - typed-argument-parser
+      - git+https://github.com/Farama-Foundation/d4rl@f2a05c0d66722499bf8031b094d9af3aea7c372b#egg=d4rl
+      - gitpython
+      - einops
+      - pillow
+      - tqdm
+      - pandas
+      - wandb
+      - flax==0.3.4
+      - jax==0.2.21
+      - ray==2.0.0
+      - crcmod
+      - google-api-python-client
+      - cryptography
+      - git+https://github.com/JannerM/doodad.git@janner
+      - gdown
+      - scikit-image==0.18.3
+      - scikit-video==1.1.11

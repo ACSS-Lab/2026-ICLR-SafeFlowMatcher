@@ -1,0 +1,12 @@
+.vscode/
+__pycache__/
+**/__pycache__/
+*.egg-info/
+
+# Logs
+logs/
+imgs/
+
+gym/
+mujoco-py/
+=0.3.5
