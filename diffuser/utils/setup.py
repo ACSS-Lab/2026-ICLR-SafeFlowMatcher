@@ -60,14 +60,16 @@ class Parser(Tap):
         self.save_diff(args)
         return args
 
-    def read_config(self, args, experiment, model='cfm'):
+    def read_config(self, args, experiment):
         '''
             Load parameters from config file
         '''
         dataset = args.dataset.replace('-', '_')
         print(f'[ utils/setup ] Reading config: {args.config}:{dataset}')
         module = importlib.import_module(args.config)
-        params = getattr(module, model)[experiment]
+        method_key = args.method
+        assert hasattr(module, method_key), f"Config missing: {method_key}"
+        params = getattr(module, method_key)[experiment] # e.g., cfm['plan']
 
         if hasattr(module, dataset) and experiment in getattr(module, dataset):
             print(f'[ utils/setup ] Using overrides | config: {args.config} | dataset: {dataset}')

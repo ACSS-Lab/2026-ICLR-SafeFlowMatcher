@@ -2,9 +2,6 @@ import diffuser.utils as utils
 import torch.nn as nn
 import pdb
 
-#export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/lib/nvidia-515
-#export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/wei/.mujoco/mujoco200/bin
-
 #-----------------------------------------------------------------------------#
 #----------------------------------- setup -----------------------------------#
 #-----------------------------------------------------------------------------#
@@ -12,6 +9,7 @@ import pdb
 class Parser(utils.Parser):
     dataset: str = 'maze2d-large-v1'
     config: str = 'config.maze2d'
+    method: str = 'cfm'
 
 args = Parser().parse_args('diffusion')
 
