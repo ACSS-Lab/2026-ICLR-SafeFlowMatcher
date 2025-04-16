@@ -31,7 +31,7 @@ base = {
 
     'diffusion': {
         ## model
-        'model': 'models.TemporalUnet',
+        'model': 'models.TemporalUnet', # TemporalUnet, ConditionalUnet1D (Not implemented yet)
         'diffusion': 'models.GaussianDiffusion',
         'horizon': 256,
         'n_diffusion_steps': 256,
@@ -133,11 +133,11 @@ cfm = {
         'loss_type': 'l2',
         'n_train_steps': 5e5, #2e6
         'batch_size': 256,  # prev is 32
-        'learning_rate': 2e-4, #prev is 2e-4
+        'learning_rate': 2e-4, # prev is 2e-4
         'gradient_accumulate_every': 1,
         'ema_decay': 0.995,
         'save_freq': 1000, # 1000
-        'sample_freq': 1000, #prev is 1000
+        'sample_freq': 5000, # prev is 1000
         'n_saves': 50,
         'save_parallel': False,
         'n_reference': 50,

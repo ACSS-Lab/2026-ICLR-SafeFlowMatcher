@@ -1,10 +1,11 @@
 import numpy as np
 import torch
 from torch import nn
-import pdb
 import torchdiffeq
-
+from torchcfm.conditional_flow_matching import ConditionalFlowMatcher
+from torchdyn.core import NeuralODE
 import diffuser.utils as utils
+import pdb
 from .helpers import (
     cosine_beta_schedule,
     extract,
@@ -12,8 +13,6 @@ from .helpers import (
     Losses,
 )
 
-from torchcfm.conditional_flow_matching import ConditionalFlowMatcher
-from torchdyn.core import NeuralODE
 
 class CFM(nn.Module):
     def __init__(self, model, horizon, observation_dim, action_dim, n_timesteps=1000,
@@ -32,7 +31,12 @@ class CFM(nn.Module):
         self.FM = ConditionalFlowMatcher(sigma=sigma)
         self.node = NeuralODE(model, solver="dopri5", sensitivity="adjoint", atol=1e-4, rtol=1e-4)
 
-        # Settings for compatibility with diffusion models
+        # Get loss coefficients and initialize objective
+        loss_weights = self.get_loss_weights(action_weight, loss_discount, loss_weights)
+        self.loss_fn = Losses[loss_type](loss_weights, self.action_dim)
+
+
+        # Settings for compatibility with diffusion models (Not important for CFM)
         betas = cosine_beta_schedule(n_timesteps)
         alphas = 1. - betas
         alphas_cumprod = torch.cumprod(alphas, axis=0)
@@ -45,30 +49,19 @@ class CFM(nn.Module):
         self.register_buffer('betas', betas)
         self.register_buffer('alphas_cumprod', alphas_cumprod)
         self.register_buffer('alphas_cumprod_prev', alphas_cumprod_prev)
-
-        # calculations for diffusion q(x_t | x_{t-1}) and others
         self.register_buffer('sqrt_alphas_cumprod', torch.sqrt(alphas_cumprod))
         self.register_buffer('sqrt_one_minus_alphas_cumprod', torch.sqrt(1. - alphas_cumprod))
         self.register_buffer('log_one_minus_alphas_cumprod', torch.log(1. - alphas_cumprod))
         self.register_buffer('sqrt_recip_alphas_cumprod', torch.sqrt(1. / alphas_cumprod))
         self.register_buffer('sqrt_recipm1_alphas_cumprod', torch.sqrt(1. / alphas_cumprod - 1))
-
-        # calculations for posterior q(x_{t-1} | x_t, x_0)
         posterior_variance = betas * (1. - alphas_cumprod_prev) / (1. - alphas_cumprod)
         self.register_buffer('posterior_variance', posterior_variance)
-
-        ## log calculation clipped because the posterior variance
-        ## is 0 at the beginning of the diffusion chain
         self.register_buffer('posterior_log_variance_clipped',
             torch.log(torch.clamp(posterior_variance, min=1e-20)))
         self.register_buffer('posterior_mean_coef1',
             betas * np.sqrt(alphas_cumprod_prev) / (1. - alphas_cumprod))
         self.register_buffer('posterior_mean_coef2',
             (1. - alphas_cumprod_prev) * np.sqrt(alphas) / (1. - alphas_cumprod))
-
-        ## get loss coefficients and initialize objective
-        loss_weights = self.get_loss_weights(action_weight, loss_discount, loss_weights)
-        self.loss_fn = Losses[loss_type](loss_weights, self.action_dim)
 
     def get_loss_weights(self, action_weight, discount, weights_dict):
         '''
@@ -85,21 +78,43 @@ class CFM(nn.Module):
 
         dim_weights = torch.ones(self.transition_dim, dtype=torch.float32)
 
-        ## set loss coefficients for dimensions of observation
+        # set loss coefficients for dimensions of observation
         if weights_dict is None: weights_dict = {}
         for ind, w in weights_dict.items():
             dim_weights[self.action_dim + ind] *= w
 
-        ## decay loss with trajectory timestep: discount**t
+        # decay loss with trajectory timestep: discount**t
         discounts = discount ** torch.arange(self.horizon, dtype=torch.float)
         discounts = discounts / discounts.mean()
         loss_weights = torch.einsum('h,t->ht', discounts, dim_weights)
 
-        ## manually set a0 weight
+        # manually set a0 weight
         loss_weights[0, :self.action_dim] = action_weight
         return loss_weights
 
     #------------------------------------------ sampling ------------------------------------------#
+    @torch.no_grad()
+    def conditioned_ode_func_record(self, t, x, cond, trajectory_list):
+        """
+        ODE vector field function with conditioning applied at each step.
+        
+        t (float or tensor): Current time step in the ODE solver.
+        x (tensor): Current state.
+        cond (dict): Conditioning dictionary used to fix specific time steps or values.
+        trajectory_list (list): List to accumulate the trajectory.
+        
+        vt (tensor): Vector field output from the model.
+        """
+        trajectory_list.append(x)  # Append the current state to the trajectory list
+
+        # 1. Apply conditioning to the current state
+        x_cond = apply_conditioning(x, cond, self.action_dim)
+        
+        # 2. Compute the vector field from the conditioned state
+        t_batch = torch.full((x.shape[0],), t, device=x.device)
+        vt = self.model(x_cond, None, t_batch)
+        
+        return vt
 
     @torch.no_grad()
     def conditioned_ode_func(self, t, x, cond):
@@ -116,7 +131,7 @@ class CFM(nn.Module):
         return vt
 
     @torch.no_grad()
-    def p_sample_loop(self, shape, cond, verbose=True, return_diffusion=False):
+    def p_sample_loop(self, shape, cond, verbose=True, record_traj=False):
         """
         Generate samples by solving the conditional ODE
         """
@@ -126,9 +141,13 @@ class CFM(nn.Module):
         # Apply condition to initial state
         x0 = apply_conditioning(x0, cond, self.action_dim)
         
-        # Wrapper function for odeint (only accepts t and x)
-        ode_fn = lambda t, x: self.conditioned_ode_func(t, x, cond)
-        
+        # Wrapper function for torchdiffeq.odeint (must accept only t and x as arguments)
+        if record_traj:
+            trajectory_list = []
+            ode_fn = lambda t, x: self.conditioned_ode_func_record(t, x, cond, trajectory_list)
+        else:
+            ode_fn = lambda t, x: self.conditioned_ode_func(t, x, cond)
+
         # Solve ODE using wrapper
         traj = torchdiffeq.odeint(
             ode_fn,
@@ -143,30 +162,35 @@ class CFM(nn.Module):
         # Apply condition again at the end (for safety)
         x1 = apply_conditioning(x1, cond, self.action_dim)
         
-        if return_diffusion:
-            return traj
+        # pdb.set_trace()
+
+        if record_traj:
+            trajectory_list.append(x1) # append last step x
+            return x1, torch.stack(trajectory_list, dim=1)
         return x1
 
     @torch.no_grad()
-    def conditional_sample(self, cond, *args, horizon=None, **kwargs):
+    def conditional_sample(self, cond, *args, horizon=None, record_traj=True, **kwargs):
         '''
-            conditions : [ (time, state), ... ]
+        conditions : [ (time, state), ... ]
         '''
-        device = self.betas.device
+        # device = self.betas.device
         batch_size = len(cond[0])
         horizon = horizon or self.horizon
         shape = (batch_size, horizon, self.transition_dim)
 
-        return self.p_sample_loop(shape, cond, *args, **kwargs)
+        return self.p_sample_loop(shape, cond, record_traj=record_traj, *args, **kwargs)
 
-    #------------------------------------------ training ------------------------------------------#
-    
     @property
     def device(self):
-        """Get the device where the model's parameters are allocated."""
+        """
+        Get the device where the model's parameters are allocated
+        """
         # Assumes the model's parameters are all on the same device.
         return next(self.parameters()).device
-
+    
+    #------------------------------------------ training ------------------------------------------#
+    
     def loss(self, x, cond):
         x = x.to(self.device)
         batch_size = len(x)

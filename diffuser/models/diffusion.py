@@ -170,19 +170,849 @@ class GaussianDiffusion(nn.Module):
 
         dim_weights = torch.ones(self.transition_dim, dtype=torch.float32)
 
-        ## set loss coefficients for dimensions of observation
+        # set loss coefficients for dimensions of observation
         if weights_dict is None: weights_dict = {}
         for ind, w in weights_dict.items():
             dim_weights[self.action_dim + ind] *= w
 
-        ## decay loss with trajectory timestep: discount**t
+        # decay loss with trajectory timestep: discount**t
         discounts = discount ** torch.arange(self.horizon, dtype=torch.float)
         discounts = discounts / discounts.mean()
         loss_weights = torch.einsum('h,t->ht', discounts, dim_weights)
 
-        ## manually set a0 weight
+        # manually set a0 weight
         loss_weights[0, :self.action_dim] = action_weight
         return loss_weights
+    
+    #------------------------------------------ Safety (Only for Sampling) ------------------------------------------#
+
+    @torch.no_grad()
+    def Shield(self, x0, xp10):
+        """
+        Truncate the trajectory to be within the safe set.
+        """
+        x = x0.clone()
+        xp1 = xp10.clone()
+
+        xp1 = xp1.squeeze(0)
+
+        nBatch = xp1.shape[0]
+
+        # normalize obstacle 1, x-1, y-0  x = 1/12*np.cos(theta) + 5.5/12, y = 1/9*np.sin(theta) + 5/9
+        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
+        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
+        off_x = 2*(5.8-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+        b = ((xp1[:,2:3] - off_y)/yr)**2 + ((xp1[:,3:4] - off_x)/xr)**2 - 1
+
+        for k in range(nBatch):
+            if b[k, 0] < 0: 
+                theta = torch.atan2((xp1[k,2:3] - off_y)/yr, (xp1[k,3:4] - off_x)/xr)
+                xp1[k,2] = yr*torch.sin(theta) + off_y
+                xp1[k,3] = xr*torch.cos(theta) + off_x
+
+        b = ((xp1[:,2:3] - off_y)/yr)**2 + ((xp1[:,3:4] - off_x)/xr)**2 - 1
+
+        # normalize obstacle 2,  x = 1/12*np.sqrt(np.abs(np.cos(theta)))*np.sign(np.cos(theta)) + 5.3/12, y = 1/9*np.sqrt(np.abs(np.sin(theta)))*np.sign(np.sin(theta)) + 2/9
+        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
+        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
+        off_x = 2*(5.3-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(2-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+        # CBF
+        b2 = ((xp1[:,2:3] - off_y)/yr)**4 + ((xp1[:,3:4] - off_x)/xr)**4 - 1
+
+        self.safe1 = torch.min(b[:,0])
+        self.safe2 = torch.min(b2[:,0])
+
+        xp1 = xp1.unsqueeze(0)
+        return xp1
+    
+    @torch.no_grad()
+    def GD(self, x0, xp10):
+        """
+        Classifier guidance or potential-based method.
+        """
+        x = x0.clone()
+        xp1 = xp10.clone()
+
+        x = x.squeeze(0)
+        xp1 = xp1.squeeze(0)
+
+        nBatch = x.shape[0]
+        ref = xp1 - x
+
+        # ormalize obstacle 1, x-1, y-0  x = 1/12*np.cos(theta) + 5.5/12, y = 1/9*np.sin(theta) + 5/9
+        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
+        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
+        off_x = 2*(5.8-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+        b = ((xp1[:,2:3] - off_y)/yr)**2 + ((xp1[:,3:4] - off_x)/xr)**2 - 1
+
+        # normalize obstacle 2,  x = 1/12*np.sqrt(np.abs(np.cos(theta)))*np.sign(np.cos(theta)) + 5.3/12, y = 1/9*np.sqrt(np.abs(np.sin(theta)))*np.sign(np.sin(theta)) + 2/9
+        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
+        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
+        off_x = 2*(5.3-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(2-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+        # CBF
+        b2 = ((xp1[:,2:3] - off_y)/yr)**4 + ((xp1[:,3:4] - off_x)/xr)**4 - 1
+
+        for k in range(nBatch):
+            if b[k, 0] < 0.1:  # 0, 0.2
+                u1 = 0.2/(2*((xp1[k,2:3] - off_y)/yr)/yr)
+                u2 = 0.2/(2*((xp1[k,3:4] - off_x)/xr)/xr)
+                xp1[k,2] = xp1[k,2] + u1*0.001  # note no 0.1/0.01 for GD, but has for potential
+                xp1[k,3] = xp1[k,3] + u2*0.001
+            elif b2[k, 0] < 0.1:  # 0, 0.2
+                u1 = 0.2/(4*((xp1[k,2:3] - off_y)/yr)**3/yr)
+                u2 = 0.2/(4*((xp1[k,3:4] - off_x)/xr)**3/xr)
+                xp1[k,2] = xp1[k,2] + u1*0.001
+                xp1[k,3] = xp1[k,3] + u2*0.001
+            # else:
+            #     x[k,2] = xp1[k,2]
+            #     x[k,3] = xp1[k,3]
+
+        self.safe1 = torch.min(b[:,0])
+        self.safe2 = torch.min(b2[:,0])
+
+        xp1 = xp1.unsqueeze(0)
+        return xp1
+
+    @torch.no_grad()
+    def invariance_umaze(self, x, xp1):
+        """
+        Robust Safe Diffuser (RoS-diffuser) for umaze
+        """
+        x = x.squeeze(0)
+        xp1 = xp1.squeeze(0)
+
+        nBatch = x.shape[0]
+        ref = xp1 - x
+
+        # normalize obstacle 1, x-1, y-0  x = 1/12*np.cos(theta) + 5.5/12, y = 1/9*np.sin(theta) + 5/9
+        xr = 2*1.52/(self.norm_maxs[1] - self.norm_mins[1])
+        yr = 2*1.52/(self.norm_maxs[0] - self.norm_mins[0])
+        off_x = 2*(2.5-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(2.5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+       # CBF
+        b = 1 - ((x[:,2:3] - off_y)/yr)**4 - ((x[:,3:4] - off_x)/xr)**4
+        Lfb = 0
+        Lgbu1 = -4*((x[:,2:3] - off_y)/yr)**3/yr
+        Lgbu2 = -4*((x[:,3:4] - off_x)/xr)**3/xr
+
+        G = torch.cat([-Lgbu1, -Lgbu2], dim = 1)
+        G = G.unsqueeze(1)
+        k = 1
+        h = Lfb + k*b
+
+        self.safe1 = torch.min(b[:,0])
+
+        # normalize obstacle 2,  x = 1/12*np.sqrt(np.abs(np.cos(theta)))*np.sign(np.cos(theta)) + 5.3/12, y = 1/9*np.sqrt(np.abs(np.sin(theta)))*np.sign(np.sin(theta)) + 2/9
+        xr = 2*1.2/(self.norm_maxs[1] - self.norm_mins[1])
+        yr = 2*0.6/(self.norm_maxs[0] - self.norm_mins[0])
+        off_x = 2*(2-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(2.5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+        # CBF
+        b = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - 1
+        Lfb = 0
+        Lgbu1 = 4*((x[:,2:3] - off_y)/yr)**3/yr
+        Lgbu2 = 4*((x[:,3:4] - off_x)/xr)**3/xr
+
+        self.safe2 = torch.min(b[:,0])
+
+        G1 = torch.cat([-Lgbu1, -Lgbu2], dim = 1)
+        G1 = G1.unsqueeze(1)
+        k = 1
+        h1 = Lfb + k*b
+
+        G = torch.cat([G, G1], dim = 1)
+        h = torch.cat([h, h1], dim = 1)
+        
+   
+        q = -ref[:,2:4].to(G.device)
+        Q = Variable(torch.eye(2))
+        Q = Q.unsqueeze(0).expand(nBatch, 2, 2).to(G.device)
+        
+        e = Variable(torch.Tensor())
+        out = QPFunction(verbose=-1, solver = QPSolvers.PDIPM_BATCHED)(Q, q, G, h, e, e)
+
+        rt = xp1.clone()      
+        rt[:,2:4] = x[:,2:4] + out
+        rt = rt.unsqueeze(0)
+        return rt
+    
+    @torch.no_grad()
+    def invariance_umaze_relax(self, x, xp1, t):
+        """
+        Relaxed Safe Diffuser (ReS-diffuser) for umaze
+        """
+        x = x.squeeze(0)
+        xp1 = xp1.squeeze(0)
+
+        nBatch = x.shape[0]
+        ref = xp1 - x
+
+        # normalize obstacle 1, x-1, y-0  x = 1/12*np.cos(theta) + 5.5/12, y = 1/9*np.sin(theta) + 5/9
+        xr = 2*1.52/(self.norm_maxs[1] - self.norm_mins[1])
+        yr = 2*1.52/(self.norm_maxs[0] - self.norm_mins[0])
+        off_x = 2*(2.5-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(2.5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+        # CBF
+        b = 1 - ((x[:,2:3] - off_y)/yr)**4 - ((x[:,3:4] - off_x)/xr)**4
+        Lfb = 0
+        Lgbu1 = -4*((x[:,2:3] - off_y)/yr)**3/yr
+        Lgbu2 = -4*((x[:,3:4] - off_x)/xr)**3/xr
+
+        self.safe1 = torch.min(b[:,0])
+
+        if t >= 10:
+            sign = 100   # relax
+        else:
+            sign = 0   # non-relax
+
+        rx0 = torch.zeros_like(Lgbu1).to(b.device)
+        rx1 = sign*torch.ones_like(Lgbu1).to(b.device)
+
+        G = torch.cat([-Lgbu1, -Lgbu2, rx1, rx0], dim = 1)
+        G = G.unsqueeze(1)
+        k = 1
+        h = Lfb + k*b
+
+        # normalize obstacle 2,  x = 1/12*np.sqrt(np.abs(np.cos(theta)))*np.sign(np.cos(theta)) + 5.3/12, y = 1/9*np.sqrt(np.abs(np.sin(theta)))*np.sign(np.sin(theta)) + 2/9
+        xr = 2*1.2/(self.norm_maxs[1] - self.norm_mins[1])
+        yr = 2*0.6/(self.norm_maxs[0] - self.norm_mins[0])
+        off_x = 2*(2-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(2.5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+        # CBF
+        b = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - 1
+        Lfb = 0
+        Lgbu1 = 4*((x[:,2:3] - off_y)/yr)**3/yr
+        Lgbu2 = 4*((x[:,3:4] - off_x)/xr)**3/xr
+
+        self.safe2 = torch.min(b[:,0])
+
+        G1 = torch.cat([-Lgbu1, -Lgbu2, rx0, rx1], dim = 1)
+        G1 = G1.unsqueeze(1)
+        k = 1
+        h1 = Lfb + k*b
+
+        G = torch.cat([G, G1], dim = 1)
+        h = torch.cat([h, h1], dim = 1)
+        
+   
+        q = -ref[:,2:4].to(G.device)
+        q0 = torch.zeros_like(q).to(G.device)
+        q = torch.cat([q, q0], dim = 1)
+        Q = Variable(torch.eye(4))
+        Q = Q.unsqueeze(0).expand(nBatch, 4, 4).to(G.device)
+        
+        e = Variable(torch.Tensor())
+        out = QPFunction(verbose=-1, solver = QPSolvers.PDIPM_BATCHED)(Q, q, G, h, e, e)
+
+        rt = xp1.clone()      
+        rt[:,2:4] = x[:,2:4] + out[:,0:2]
+        rt = rt.unsqueeze(0)
+        return rt
+
+    @torch.no_grad()
+    def invariance(self, x, xp1):
+        """
+        Robust Safe Diffuser (RoS-diffuser) for maze2d-large-v1       
+        """
+        x = x.squeeze(0)
+        xp1 = xp1.squeeze(0)
+
+        nBatch = x.shape[0]
+        ref = xp1 - x
+
+        # normalize obstacle 1, x-1, y-0  x = 1/12*np.cos(theta) + 5.5/12, y = 1/9*np.sin(theta) + 5/9
+        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
+        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
+        off_x = 2*(5.8-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+        # CBF
+        b = ((x[:,2:3] - off_y)/yr)**2 + ((x[:,3:4] - off_x)/xr)**2 - 1 - 0.01  # robust term 09/25
+        Lfb = 0
+        Lgbu1 = 2*((x[:,2:3] - off_y)/yr)/yr
+        Lgbu2 = 2*((x[:,3:4] - off_x)/xr)/xr
+
+        G = torch.cat([-Lgbu1, -Lgbu2], dim = 1)
+        G = G.unsqueeze(1)
+        k = 1
+        h = Lfb + k*b
+
+        self.safe1 = torch.min(b[:,0] + 0.01)  # robust term 09/25
+
+        # normalize obstacle 2,  x = 1/12*np.sqrt(np.abs(np.cos(theta)))*np.sign(np.cos(theta)) + 5.3/12, y = 1/9*np.sqrt(np.abs(np.sin(theta)))*np.sign(np.sin(theta)) + 2/9
+        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
+        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
+        off_x = 2*(5.3-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(2-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+        # CBF
+        b = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - 1 - 0.01 # robust term 09/25
+        Lfb = 0
+        Lgbu1 = 4*((x[:,2:3] - off_y)/yr)**3/yr
+        Lgbu2 = 4*((x[:,3:4] - off_x)/xr)**3/xr
+
+        self.safe2 = torch.min(b[:,0]+ 0.01) # robust term 09/25
+
+        G1 = torch.cat([-Lgbu1, -Lgbu2], dim = 1)
+        G1 = G1.unsqueeze(1)
+        k = 1
+        h1 = Lfb + k*b
+
+        G = torch.cat([G, G1], dim = 1)
+        h = torch.cat([h, h1], dim = 1)
+        
+   
+        q = -ref[:,2:4].to(G.device)
+        Q = Variable(torch.eye(2))
+        Q = Q.unsqueeze(0).expand(nBatch, 2, 2).to(G.device)
+        
+        e = Variable(torch.Tensor())
+        out = QPFunction(verbose=-1, solver = QPSolvers.PDIPM_BATCHED)(Q, q, G, h, e, e)
+
+        rt = xp1.clone()      
+        rt[:,2:4] = x[:,2:4] + out
+        # print(out)
+        rt = rt.unsqueeze(0)
+        return rt
+
+    @torch.no_grad()
+    def invariance_cf(self, x, xp1):
+        """
+        Robust Safe Diffuser (RoS-diffuser) for maze2d-large-v1
+        (closed form solution)
+        """
+        x = x.squeeze(0)
+        xp1 = xp1.squeeze(0)
+
+        nBatch = x.shape[0]
+        ref = xp1 - x
+
+        # normalize obstacle 1, x-1, y-0  x = 1/12*np.cos(theta) + 5.5/12, y = 1/9*np.sin(theta) + 5/9
+        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
+        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
+        off_x = 2*(5.8-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+        # CBF
+        b0 = ((x[:,2:3] - off_y)/yr)**2 + ((x[:,3:4] - off_x)/xr)**2 - 1 - 0.01  # robust term 09/25
+        Lfb = 0
+        Lgbu1 = 2*((x[:,2:3] - off_y)/yr)/yr
+        Lgbu2 = 2*((x[:,3:4] - off_x)/xr)/xr
+
+        G0 = torch.cat([-Lgbu1, -Lgbu2], dim = 1)
+        k = 1
+        h0 = Lfb + k*b0
+
+        self.safe1 = torch.min(b0[:,0] + 0.01)  # robust term 09/25
+
+        # normalize obstacle 2,  x = 1/12*np.sqrt(np.abs(np.cos(theta)))*np.sign(np.cos(theta)) + 5.3/12, y = 1/9*np.sqrt(np.abs(np.sin(theta)))*np.sign(np.sin(theta)) + 2/9
+        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
+        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
+        off_x = 2*(5.3-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(2-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+        # CBF
+        b = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - 1 - 0.01 # robust term 09/25
+        Lfb = 0
+        Lgbu1 = 4*((x[:,2:3] - off_y)/yr)**3/yr
+        Lgbu2 = 4*((x[:,3:4] - off_x)/xr)**3/xr
+
+        self.safe2 = torch.min(b[:,0]+ 0.01) # robust term 09/25
+
+        G1 = torch.cat([-Lgbu1, -Lgbu2], dim = 1)
+        k = 1
+        h1 = Lfb + k*b
+        
+        q = -ref[:,2:4].to(b.device)
+        
+        y1_bar = 1*G0  # H or Q = identity matrix
+        y2_bar = 1*G1
+        u_bar = -1*q
+        p1_bar = h0 - torch.sum(G0*u_bar,dim = 1).unsqueeze(1)
+        p2_bar = h1 - torch.sum(G1*u_bar,dim = 1).unsqueeze(1)
+
+        G = torch.cat([torch.sum(y1_bar*y1_bar,dim = 1).unsqueeze(1).unsqueeze(0), torch.sum(y1_bar*y2_bar,dim = 1).unsqueeze(1).unsqueeze(0), torch.sum(y2_bar*y1_bar,dim = 1).unsqueeze(1).unsqueeze(0), torch.sum(y2_bar*y2_bar,dim = 1).unsqueeze(1).unsqueeze(0)], dim = 0)
+        # G = 1*[y1_bar*y1_bar', y1_bar*y2_bar'; y2_bar*y1_bar', y2_bar*y2_bar']
+        w_p1_bar = torch.clamp(p1_bar, max=0)
+        w_p2_bar = torch.clamp(p2_bar, max=0)
+
+        # G 0-(1,1), 1-(1,2), 2-(2,1), 3-(2,2)
+        lambda1 = torch.where(G[2]*w_p2_bar < G[3]*p1_bar, torch.zeros_like(p1_bar), torch.where(G[1]*w_p1_bar < G[0]*p2_bar, w_p1_bar/G[0], torch.clamp(G[3]*p1_bar - G[2]*p2_bar, max=0)/(G[0]*G[3] - G[1]*G[2])))
+        
+        lambda2 = torch.where(G[2]*w_p2_bar < G[3]*p1_bar, w_p2_bar/G[3], torch.where(G[1]*w_p1_bar < G[0]*p2_bar, torch.zeros_like(p1_bar), torch.clamp(G[0]*p2_bar - G[1]*p1_bar, max=0)/(G[0]*G[3] - G[1]*G[2])))
+
+        out = lambda1*y1_bar + lambda2*y2_bar + u_bar
+        rt = xp1.clone()      
+        rt[:,2:4] = x[:,2:4] + out
+        # print(out)
+        rt = rt.unsqueeze(0)
+        return rt
+
+    @torch.no_grad()
+    def invariance_relax(self, x, xp1, t):
+        """
+        Relaxed Safe Diffuser (ReS-diffuser) for maze2d-large-v1
+        """
+        x = x.squeeze(0)
+        xp1 = xp1.squeeze(0)
+
+        nBatch = x.shape[0]
+        ref = xp1 - x
+
+        # normalize obstacle 1, x-1, y-0  x = 1/12*np.cos(theta) + 5.5/12, y = 1/9*np.sin(theta) + 5/9
+        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
+        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
+        off_x = 2*(5.8-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+        # CBF
+        b = ((x[:,2:3] - off_y)/yr)**2 + ((x[:,3:4] - off_x)/xr)**2 - 1 - 0.01
+        Lfb = 0
+        Lgbu1 = 2*((x[:,2:3] - off_y)/yr)/yr
+        Lgbu2 = 2*((x[:,3:4] - off_x)/xr)/xr
+
+        self.safe1 = torch.min(b[:,0] + 0.01)
+
+        if t >= 10:   # debug  10
+            sign = 100   # relax
+        else:
+            sign = 0   # non-relax
+
+        rx0 = torch.zeros_like(Lgbu1).to(b.device)
+        rx1 = sign*torch.ones_like(Lgbu1).to(b.device)
+
+        G = torch.cat([-Lgbu1, -Lgbu2, rx1, rx0], dim = 1)
+        G = G.unsqueeze(1)
+        k = 1
+        h = Lfb + k*b
+
+        # normalize obstacle 2,  x = 1/12*np.sqrt(np.abs(np.cos(theta)))*np.sign(np.cos(theta)) + 5.3/12, y = 1/9*np.sqrt(np.abs(np.sin(theta)))*np.sign(np.sin(theta)) + 2/9
+        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
+        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
+        off_x = 2*(5.3-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(2-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+        # CBF
+        b = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - 1 - 0.01
+        Lfb = 0
+        Lgbu1 = 4*((x[:,2:3] - off_y)/yr)**3/yr
+        Lgbu2 = 4*((x[:,3:4] - off_x)/xr)**3/xr
+
+        self.safe2 = torch.min(b[:,0] + 0.01)
+
+        G1 = torch.cat([-Lgbu1, -Lgbu2, rx0, rx1], dim = 1)
+        G1 = G1.unsqueeze(1)
+        k = 1
+        h1 = Lfb + k*b
+
+        G = torch.cat([G, G1], dim = 1)
+        h = torch.cat([h, h1], dim = 1)
+        
+   
+        q = -ref[:,2:4].to(G.device)
+        q0 = torch.zeros_like(q).to(G.device)
+        q = torch.cat([q, q0], dim = 1)
+        Q = Variable(torch.eye(4))
+        Q = Q.unsqueeze(0).expand(nBatch, 4, 4).to(G.device)
+        
+        e = Variable(torch.Tensor())
+        out = QPFunction(verbose=-1, solver = QPSolvers.PDIPM_BATCHED)(Q, q, G, h, e, e)
+
+        rt = xp1.clone()      
+        rt[:,2:4] = x[:,2:4] + out[:,0:2]
+        rt = rt.unsqueeze(0)
+        return rt
+    
+    @torch.no_grad()
+    def invariance_relax_cf(self, x, xp1, t):
+        """
+        Relaxed Safe Diffuser (ReS-diffuser) for maze2d-large-v1
+        (closed form solution)
+        """
+        x = x.squeeze(0)
+        xp1 = xp1.squeeze(0)
+
+        nBatch = x.shape[0]
+        ref = xp1 - x
+
+        # normalize obstacle 1, x-1, y-0  x = 1/12*np.cos(theta) + 5.5/12, y = 1/9*np.sin(theta) + 5/9
+        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
+        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
+        off_x = 2*(5.8-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+        # CBF
+        b = ((x[:,2:3] - off_y)/yr)**2 + ((x[:,3:4] - off_x)/xr)**2 - 1 - 0.01
+        Lfb = 0
+        Lgbu1 = 2*((x[:,2:3] - off_y)/yr)/yr
+        Lgbu2 = 2*((x[:,3:4] - off_x)/xr)/xr
+
+        self.safe1 = torch.min(b[:,0] + 0.01)
+
+        if t >= 10:   # debug  10
+            sign = 100   #relax
+        else:
+            sign = 0   # non-relax
+
+        rx0 = torch.zeros_like(Lgbu1).to(b.device)
+        rx1 = sign*torch.ones_like(Lgbu1).to(b.device)
+
+        G0 = torch.cat([-Lgbu1, -Lgbu2, rx1, rx0], dim = 1)
+        k = 1
+        h0 = Lfb + k*b
+
+        # normalize obstacle 2,  x = 1/12*np.sqrt(np.abs(np.cos(theta)))*np.sign(np.cos(theta)) + 5.3/12, y = 1/9*np.sqrt(np.abs(np.sin(theta)))*np.sign(np.sin(theta)) + 2/9
+        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
+        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
+        off_x = 2*(5.3-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(2-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+        # CBF
+        b = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - 1 - 0.01
+        Lfb = 0
+        Lgbu1 = 4*((x[:,2:3] - off_y)/yr)**3/yr
+        Lgbu2 = 4*((x[:,3:4] - off_x)/xr)**3/xr
+
+        self.safe2 = torch.min(b[:,0] + 0.01)
+
+        G1 = torch.cat([-Lgbu1, -Lgbu2, rx0, rx1], dim = 1)
+        k = 1
+        h1 = Lfb + k*b
+        
+   
+        q = -ref[:,2:4].to(G0.device)
+        q0 = torch.zeros_like(q).to(G0.device)
+        q = torch.cat([q, q0], dim = 1)
+
+        y1_bar = 1*G0  # H or Q = identity matrix
+        y2_bar = 1*G1
+        u_bar = -1*q
+        p1_bar = h0 - torch.sum(G0*u_bar,dim = 1).unsqueeze(1)
+        p2_bar = h1 - torch.sum(G1*u_bar,dim = 1).unsqueeze(1)
+
+        G = torch.cat([torch.sum(y1_bar*y1_bar,dim = 1).unsqueeze(1).unsqueeze(0), torch.sum(y1_bar*y2_bar,dim = 1).unsqueeze(1).unsqueeze(0), torch.sum(y2_bar*y1_bar,dim = 1).unsqueeze(1).unsqueeze(0), torch.sum(y2_bar*y2_bar,dim = 1).unsqueeze(1).unsqueeze(0)], dim = 0)
+        # G = 1*[y1_bar*y1_bar', y1_bar*y2_bar'; y2_bar*y1_bar', y2_bar*y2_bar']
+        w_p1_bar = torch.clamp(p1_bar, max=0)
+        w_p2_bar = torch.clamp(p2_bar, max=0)
+
+        # G 0-(1,1), 1-(1,2), 2-(2,1), 3-(2,2)
+        lambda1 = torch.where(G[2]*w_p2_bar < G[3]*p1_bar, torch.zeros_like(p1_bar), torch.where(G[1]*w_p1_bar < G[0]*p2_bar, w_p1_bar/G[0], torch.clamp(G[3]*p1_bar - G[2]*p2_bar, max=0)/(G[0]*G[3] - G[1]*G[2])))
+        
+        lambda2 = torch.where(G[2]*w_p2_bar < G[3]*p1_bar, w_p2_bar/G[3], torch.where(G[1]*w_p1_bar < G[0]*p2_bar, torch.zeros_like(p1_bar), torch.clamp(G[0]*p2_bar - G[1]*p1_bar, max=0)/(G[0]*G[3] - G[1]*G[2])))
+
+        out = lambda1*y1_bar + lambda2*y2_bar + u_bar
+        rt = xp1.clone()    
+        rt[:,2:4] = x[:,2:4] + out[:,0:2]
+        # print(out)
+        rt = rt.unsqueeze(0)
+        return rt
+    
+
+    @torch.no_grad()
+    def invariance_relax_narrow(self, x, xp1, t):
+        """
+        Relaxed Safe Diffuser (ReS-diffuser) for maze2d-large-v1
+        (narrow passage case)
+        """
+        x = x.squeeze(0)
+        xp1 = xp1.squeeze(0)
+
+        nBatch = x.shape[0]
+        ref = xp1 - x
+
+        if t >= 10:   # debug  10
+            sign = 1   # relax
+        else:
+            sign = 0   # non-relax
+
+        # normalize obstacle 1,  x = 1/12*np.sqrt(np.abs(np.cos(theta)))*np.sign(np.cos(theta)) + 5.3/12, y = 1/9*np.sqrt(np.abs(np.sin(theta)))*np.sign(np.sin(theta)) + 2/9
+        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
+        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
+
+        off_x = 2*(5.5-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(2-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+        # CBF
+        b = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - 1 - 0.4  # 0.01
+        Lfb = 0
+        Lgbu1 = 4*((x[:,2:3] - off_y)/yr)**3/yr
+        Lgbu2 = 4*((x[:,3:4] - off_x)/xr)**3/xr
+
+        rx0 = torch.zeros_like(Lgbu1).to(b.device)
+        rx1 = sign*torch.ones_like(Lgbu1).to(b.device)
+
+        self.safe1 = torch.min(b[:,0] + 0.01)
+
+        G1 = torch.cat([-Lgbu1, -Lgbu2, rx1, rx0, rx0, rx0, rx0, rx0], dim = 1)
+        G1 = G1.unsqueeze(1)
+        k = 1
+        h1 = Lfb + k*b
+
+        ########################################### obs 2
+        off_x = 2*(5.5-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+        # CBF
+        b2 = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - 1 - 0.6 #0.01
+        Lfb = 0
+        Lgbu12 = 4*((x[:,2:3] - off_y)/yr)**3/yr
+        Lgbu22 = 4*((x[:,3:4] - off_x)/xr)**3/xr
+
+        self.safe2 = torch.min(b2[:,0] + 0.01)
+
+        G2 = torch.cat([-Lgbu12, -Lgbu22, rx0, rx1, rx0, rx0, rx0, rx0], dim = 1)
+        G2 = G2.unsqueeze(1)
+        k = 1
+        h2 = Lfb + k*b2
+
+        ########################################### obs 3
+        off_x = 2*(3-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(2.5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+        # CBF
+        b3 = ((x[:,2:3] - off_y)/yr/0.5)**4 + ((x[:,3:4] - off_x)/xr)**4 - 1 - 0.01
+        Lfb = 0
+        Lgbu13 = 4*((x[:,2:3] - off_y)/yr/0.5)**3/yr
+        Lgbu23 = 4*((x[:,3:4] - off_x)/xr)**3/xr
+
+        G3 = torch.cat([-Lgbu13, -Lgbu23, rx0, rx0, rx1, rx0, rx0, rx0], dim = 1)
+        G3 = G3.unsqueeze(1)
+        k = 1
+        h3 = Lfb + k*b3
+
+        ########################################### obs 4
+        off_x = 2*(8.5-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(3.5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+        # CBF
+        b4 = ((x[:,2:3] - off_y)/yr/1.8)**4 + ((x[:,3:4] - off_x)/xr/1.8)**4 - 1 - 0.01
+        Lfb = 0
+        Lgbu14 = 4*((x[:,2:3] - off_y)/yr/1.8)**3/yr
+        Lgbu24 = 4*((x[:,3:4] - off_x)/xr/1.8)**3/xr
+
+        G4 = torch.cat([-Lgbu14, -Lgbu24, rx0, rx0, rx0, rx1, rx0, rx0], dim = 1)
+        G4 = G4.unsqueeze(1)
+        k = 1
+        h4 = Lfb + k*b4
+
+        ########################################### obs 5
+        off_x = 2*(7.6-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(7-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+        # CBF
+        b5 = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - 1 - 0.4 #0.01
+        Lfb = 0
+        Lgbu15 = 4*((x[:,2:3] - off_y)/yr)**3/yr
+        Lgbu25 = 4*((x[:,3:4] - off_x)/xr)**3/xr
+
+        G5 = torch.cat([-Lgbu15, -Lgbu25, rx0, rx0, rx0, rx0, rx1, rx0], dim = 1)
+        G5 = G5.unsqueeze(1)
+        k = 1
+        h5 = Lfb + k*b5
+
+        ########################################### obs 6
+        off_x = 2*(10-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(6.3-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+        # CBF
+        b6 = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - 1 - 0.01
+        Lfb = 0
+        Lgbu16 = 4*((x[:,2:3] - off_y)/yr)**3/yr
+        Lgbu26 = 4*((x[:,3:4] - off_x)/xr)**3/xr
+
+        G6 = torch.cat([-Lgbu16, -Lgbu26, rx0, rx0, rx0, rx0, rx0, rx1], dim = 1)
+        G6 = G6.unsqueeze(1)
+        k = 1
+        h6 = Lfb + k*b6
+
+        b0 = torch.cat([b, b2, b3, b4, b5, b6], dim = 1)
+        idx = torch.argmin(b0, dim = 1).cpu().numpy()
+        G0 = torch.cat([G1, G2, G3, G4, G5, G6], dim = 1)
+        h0 = torch.cat([h1, h2, h3, h4, h5, h6], dim = 1)
+        rows = len(G0[:,0,0])
+        G = []
+        h = []
+        for i in range(rows):
+            G.append(G0[i:i+1,idx[i]:idx[i]+1])
+            h.append(h0[i:i+1,idx[i]:idx[i]+1])
+        G = torch.cat(G, dim = 0)
+        h = torch.cat(h, dim = 0)
+
+        # G = torch.cat([G1, G2, G3, G4, G5, G6], dim = 1)
+        # h = torch.cat([h1, h2, h3, h4, h5, h6], dim = 1)
+
+        # G = torch.cat([G1, G2, G3, G5], dim = 1)
+        # h = torch.cat([h1, h2, h3, h5], dim = 1)
+        
+        q = -ref[:,2:4].to(G.device)
+        q0 = torch.zeros_like(q).to(G.device)
+        q = torch.cat([q, q0, q0, q0], dim = 1)
+        Q = Variable(torch.eye(8))
+        Q = Q.unsqueeze(0).expand(nBatch, 8, 8).to(G.device)
+        
+        e = Variable(torch.Tensor())
+        out = QPFunction(verbose=-1, solver = QPSolvers.PDIPM_BATCHED)(Q, q, G, h, e, e)
+
+        rt = xp1.clone()      
+        rt[:,2:4] = x[:,2:4] + out[:,0:2]
+        rt = rt.unsqueeze(0)
+        return rt
+
+
+    @torch.no_grad()
+    def invariance_time(self, x, xp1, t):
+        """
+        Time-varying Safe Diffuser (TVS-diffuser) for maze2d-large-v1
+        """
+        t_bias = 5  #50
+
+        x = x.squeeze(0)
+        xp1 = xp1.squeeze(0)
+
+        nBatch = x.shape[0]
+        ref = xp1 - x
+
+        # normalize obstacle 1, x-1, y-0  x = 1/12*np.cos(theta) + 5.5/12, y = 1/9*np.sin(theta) + 5/9
+        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
+        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
+        off_x = 2*(5.8-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+        # CBF
+        b = ((x[:,2:3] - off_y)/yr)**2 + ((x[:,3:4] - off_x)/xr)**2 - nn.Sigmoid()(t_bias - t) -0.01
+        Lfb = nn.Sigmoid()(t_bias - t)*(1 - nn.Sigmoid()(t_bias - t))
+        Lgbu1 = 2*((x[:,2:3] - off_y)/yr)/yr
+        Lgbu2 = 2*((x[:,3:4] - off_x)/xr)/xr
+
+        self.safe1 = torch.min(b[:,0] + 0.01)
+
+        G = torch.cat([-Lgbu1, -Lgbu2], dim = 1)
+        G = G.unsqueeze(1)
+        k = 1  #0.3
+        h = Lfb + k*b
+
+        # normalize obstacle 2,  x = 1/12*np.sqrt(np.abs(np.cos(theta)))*np.sign(np.cos(theta)) + 5.3/12, y = 1/9*np.sqrt(np.abs(np.sin(theta)))*np.sign(np.sin(theta)) + 2/9
+        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
+        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
+        off_x = 2*(5.3-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(2-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+        # CBF
+        b = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - nn.Sigmoid()(t_bias - t) - 0.01
+        Lfb = nn.Sigmoid()(t_bias - t)*(1 - nn.Sigmoid()(t_bias - t))
+        Lgbu1 = 4*((x[:,2:3] - off_y)/yr)**3/yr
+        Lgbu2 = 4*((x[:,3:4] - off_x)/xr)**3/xr
+
+        self.safe2 = torch.min(b[:,0] + 0.01)
+
+        G1 = torch.cat([-Lgbu1, -Lgbu2], dim = 1)
+        G1 = G1.unsqueeze(1)
+        k = 1  #0.4
+        h1 = Lfb + k*b
+
+        G = torch.cat([G, G1], dim = 1)
+        h = torch.cat([h, h1], dim = 1)
+        
+   
+        q = -ref[:,2:4].to(G.device)
+        Q = Variable(torch.eye(2))
+        Q = Q.unsqueeze(0).expand(nBatch, 2, 2).to(G.device)
+        
+        e = Variable(torch.Tensor())
+        out = QPFunction(verbose=-1, solver = QPSolvers.PDIPM_BATCHED)(Q, q, G, h, e, e)
+
+        rt = xp1.clone()      
+        rt[:,2:4] = x[:,2:4] + out
+        rt = rt.unsqueeze(0)
+        return rt
+
+    @torch.no_grad()
+    def invariance_time_cf(self, x, xp1, t):
+        """
+        Time-varying Safe Diffuser (TVS-diffuser) for maze2d-large-v1
+        (closed form solution)
+        """
+        t_bias = 5  #50 
+
+        x = x.squeeze(0)
+        xp1 = xp1.squeeze(0)
+
+        nBatch = x.shape[0]
+        ref = xp1 - x
+
+        # normalize obstacle 1, x-1, y-0  x = 1/12*np.cos(theta) + 5.5/12, y = 1/9*np.sin(theta) + 5/9
+        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
+        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
+        off_x = 2*(5.8-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+        # CBF
+        b = ((x[:,2:3] - off_y)/yr)**2 + ((x[:,3:4] - off_x)/xr)**2 - nn.Sigmoid()(t_bias - t) -0.01
+        Lfb = nn.Sigmoid()(t_bias - t)*(1 - nn.Sigmoid()(t_bias - t))
+        Lgbu1 = 2*((x[:,2:3] - off_y)/yr)/yr
+        Lgbu2 = 2*((x[:,3:4] - off_x)/xr)/xr
+
+        self.safe1 = torch.min(b[:,0] + 0.01)
+
+        G0 = torch.cat([-Lgbu1, -Lgbu2], dim = 1)
+        k = 1  #0.3
+        h0 = Lfb + k*b
+
+        # normalize obstacle 2,  x = 1/12*np.sqrt(np.abs(np.cos(theta)))*np.sign(np.cos(theta)) + 5.3/12, y = 1/9*np.sqrt(np.abs(np.sin(theta)))*np.sign(np.sin(theta)) + 2/9
+        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
+        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
+        off_x = 2*(5.3-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
+        off_y = 2*(2-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
+
+        # CBF
+        b = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - nn.Sigmoid()(t_bias - t) - 0.01
+        Lfb = nn.Sigmoid()(t_bias - t)*(1 - nn.Sigmoid()(t_bias - t))
+        Lgbu1 = 4*((x[:,2:3] - off_y)/yr)**3/yr
+        Lgbu2 = 4*((x[:,3:4] - off_x)/xr)**3/xr
+
+        self.safe2 = torch.min(b[:,0] + 0.01)
+
+        G1 = torch.cat([-Lgbu1, -Lgbu2], dim = 1)
+        k = 1  # 0.4
+        h1 = Lfb + k*b
+        
+   
+        q = -ref[:,2:4].to(G0.device)
+
+        y1_bar = 1*G0  # H or Q = identity matrix
+        y2_bar = 1*G1
+        u_bar = -1*q
+        p1_bar = h0 - torch.sum(G0*u_bar,dim = 1).unsqueeze(1)
+        p2_bar = h1 - torch.sum(G1*u_bar,dim = 1).unsqueeze(1)
+
+        G = torch.cat([torch.sum(y1_bar*y1_bar,dim = 1).unsqueeze(1).unsqueeze(0), torch.sum(y1_bar*y2_bar,dim = 1).unsqueeze(1).unsqueeze(0), torch.sum(y2_bar*y1_bar,dim = 1).unsqueeze(1).unsqueeze(0), torch.sum(y2_bar*y2_bar,dim = 1).unsqueeze(1).unsqueeze(0)], dim = 0)
+        # G = 1*[y1_bar*y1_bar', y1_bar*y2_bar'; y2_bar*y1_bar', y2_bar*y2_bar']
+        w_p1_bar = torch.clamp(p1_bar, max=0)
+        w_p2_bar = torch.clamp(p2_bar, max=0)
+
+        # G 0-(1,1), 1-(1,2), 2-(2,1), 3-(2,2)
+        lambda1 = torch.where(G[2]*w_p2_bar < G[3]*p1_bar, torch.zeros_like(p1_bar), torch.where(G[1]*w_p1_bar < G[0]*p2_bar, w_p1_bar/G[0], torch.clamp(G[3]*p1_bar - G[2]*p2_bar, max=0)/(G[0]*G[3] - G[1]*G[2])))
+        
+        lambda2 = torch.where(G[2]*w_p2_bar < G[3]*p1_bar, w_p2_bar/G[3], torch.where(G[1]*w_p1_bar < G[0]*p2_bar, torch.zeros_like(p1_bar), torch.clamp(G[0]*p2_bar - G[1]*p1_bar, max=0)/(G[0]*G[3] - G[1]*G[2])))
+
+        out = lambda1*y1_bar + lambda2*y2_bar + u_bar
+        rt = xp1.clone()    
+        rt[:,2:4] = x[:,2:4] + out
+        # print(out)
+        rt = rt.unsqueeze(0)
+        return rt        
 
     #------------------------------------------ sampling ------------------------------------------#
 
@@ -221,813 +1051,6 @@ class GaussianDiffusion(nn.Module):
         model_mean, posterior_variance, posterior_log_variance = self.q_posterior(
                 x_start=x_recon, x_t=x, t=t)
         return model_mean, posterior_variance, posterior_log_variance
-    
-    @torch.no_grad()   #only for sampling
-    def Shield(self, x0, xp10):  #Truncate method
-
-        x = x0.clone()
-        xp1 = xp10.clone()
-
-        xp1 = xp1.squeeze(0)
-
-        nBatch = xp1.shape[0]
-
-        #normalize obstacle 1, x-1, y-0  x = 1/12*np.cos(theta) + 5.5/12, y = 1/9*np.sin(theta) + 5/9
-        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
-        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
-        off_x = 2*(5.8-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        b = ((xp1[:,2:3] - off_y)/yr)**2 + ((xp1[:,3:4] - off_x)/xr)**2 - 1
-
-        for k in range(nBatch):
-            if b[k, 0] < 0: 
-                theta = torch.atan2((xp1[k,2:3] - off_y)/yr, (xp1[k,3:4] - off_x)/xr)
-                xp1[k,2] = yr*torch.sin(theta) + off_y
-                xp1[k,3] = xr*torch.cos(theta) + off_x
-
-        b = ((xp1[:,2:3] - off_y)/yr)**2 + ((xp1[:,3:4] - off_x)/xr)**2 - 1
-
-         #normalize obstacle 2,  x = 1/12*np.sqrt(np.abs(np.cos(theta)))*np.sign(np.cos(theta)) + 5.3/12, y = 1/9*np.sqrt(np.abs(np.sin(theta)))*np.sign(np.sin(theta)) + 2/9
-        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
-        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
-        off_x = 2*(5.3-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(2-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        #CBF
-        b2 = ((xp1[:,2:3] - off_y)/yr)**4 + ((xp1[:,3:4] - off_x)/xr)**4 - 1
-
-        self.safe1 = torch.min(b[:,0])
-        self.safe2 = torch.min(b2[:,0])
-
-        xp1 = xp1.unsqueeze(0)
-        return xp1
-    
-    @torch.no_grad()   #only for sampling
-    def GD(self, x0, xp10):    #classifier guidance or potential-based method
-
-        x = x0.clone()
-        xp1 = xp10.clone()
-
-        x = x.squeeze(0)
-        xp1 = xp1.squeeze(0)
-
-        nBatch = x.shape[0]
-        ref = xp1 - x
-
-        #normalize obstacle 1, x-1, y-0  x = 1/12*np.cos(theta) + 5.5/12, y = 1/9*np.sin(theta) + 5/9
-        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
-        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
-        off_x = 2*(5.8-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        b = ((xp1[:,2:3] - off_y)/yr)**2 + ((xp1[:,3:4] - off_x)/xr)**2 - 1
-
-        #normalize obstacle 2,  x = 1/12*np.sqrt(np.abs(np.cos(theta)))*np.sign(np.cos(theta)) + 5.3/12, y = 1/9*np.sqrt(np.abs(np.sin(theta)))*np.sign(np.sin(theta)) + 2/9
-        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
-        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
-        off_x = 2*(5.3-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(2-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        #CBF
-        b2 = ((xp1[:,2:3] - off_y)/yr)**4 + ((xp1[:,3:4] - off_x)/xr)**4 - 1
-
-        for k in range(nBatch):
-            if b[k, 0] < 0.1:  # 0, 0.2
-                u1 = 0.2/(2*((xp1[k,2:3] - off_y)/yr)/yr)
-                u2 = 0.2/(2*((xp1[k,3:4] - off_x)/xr)/xr)
-                xp1[k,2] = xp1[k,2] + u1*0.001  #note no 0.1/0.01 for GD, but has for potential
-                xp1[k,3] = xp1[k,3] + u2*0.001
-            elif b2[k, 0] < 0.1:  # 0, 0.2
-                u1 = 0.2/(4*((xp1[k,2:3] - off_y)/yr)**3/yr)
-                u2 = 0.2/(4*((xp1[k,3:4] - off_x)/xr)**3/xr)
-                xp1[k,2] = xp1[k,2] + u1*0.001
-                xp1[k,3] = xp1[k,3] + u2*0.001
-            # else:
-            #     x[k,2] = xp1[k,2]
-            #     x[k,3] = xp1[k,3]
-
-        self.safe1 = torch.min(b[:,0])
-        self.safe2 = torch.min(b2[:,0])
-
-        xp1 = xp1.unsqueeze(0)
-        return xp1
-
-    @torch.no_grad()   #only for sampling
-    def invariance_umaze(self, x, xp1):   #  RoS-diffuser for umaze
-
-        x = x.squeeze(0)
-        xp1 = xp1.squeeze(0)
-
-        nBatch = x.shape[0]
-        ref = xp1 - x
-
-        #normalize obstacle 1, x-1, y-0  x = 1/12*np.cos(theta) + 5.5/12, y = 1/9*np.sin(theta) + 5/9
-        xr = 2*1.52/(self.norm_maxs[1] - self.norm_mins[1])
-        yr = 2*1.52/(self.norm_maxs[0] - self.norm_mins[0])
-        off_x = 2*(2.5-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(2.5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-       #CBF
-        b = 1 - ((x[:,2:3] - off_y)/yr)**4 - ((x[:,3:4] - off_x)/xr)**4
-        Lfb = 0
-        Lgbu1 = -4*((x[:,2:3] - off_y)/yr)**3/yr
-        Lgbu2 = -4*((x[:,3:4] - off_x)/xr)**3/xr
-
-        G = torch.cat([-Lgbu1, -Lgbu2], dim = 1)
-        G = G.unsqueeze(1)
-        k = 1
-        h = Lfb + k*b
-
-        self.safe1 = torch.min(b[:,0])
-
-        #normalize obstacle 2,  x = 1/12*np.sqrt(np.abs(np.cos(theta)))*np.sign(np.cos(theta)) + 5.3/12, y = 1/9*np.sqrt(np.abs(np.sin(theta)))*np.sign(np.sin(theta)) + 2/9
-        xr = 2*1.2/(self.norm_maxs[1] - self.norm_mins[1])
-        yr = 2*0.6/(self.norm_maxs[0] - self.norm_mins[0])
-        off_x = 2*(2-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(2.5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        #CBF
-        b = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - 1
-        Lfb = 0
-        Lgbu1 = 4*((x[:,2:3] - off_y)/yr)**3/yr
-        Lgbu2 = 4*((x[:,3:4] - off_x)/xr)**3/xr
-
-        self.safe2 = torch.min(b[:,0])
-
-        G1 = torch.cat([-Lgbu1, -Lgbu2], dim = 1)
-        G1 = G1.unsqueeze(1)
-        k = 1
-        h1 = Lfb + k*b
-
-        G = torch.cat([G, G1], dim = 1)
-        h = torch.cat([h, h1], dim = 1)
-        
-   
-        q = -ref[:,2:4].to(G.device)
-        Q = Variable(torch.eye(2))
-        Q = Q.unsqueeze(0).expand(nBatch, 2, 2).to(G.device)
-        
-        e = Variable(torch.Tensor())
-        out = QPFunction(verbose=-1, solver = QPSolvers.PDIPM_BATCHED)(Q, q, G, h, e, e)
-
-        rt = xp1.clone()      
-        rt[:,2:4] = x[:,2:4] + out
-        rt = rt.unsqueeze(0)
-        return rt
-    
-    @torch.no_grad()   #only for sampling
-    def invariance_umaze_relax(self, x, xp1, t):  #  ReS-diffuser for umaze
-
-        x = x.squeeze(0)
-        xp1 = xp1.squeeze(0)
-
-        nBatch = x.shape[0]
-        ref = xp1 - x
-
-        #normalize obstacle 1, x-1, y-0  x = 1/12*np.cos(theta) + 5.5/12, y = 1/9*np.sin(theta) + 5/9
-        xr = 2*1.52/(self.norm_maxs[1] - self.norm_mins[1])
-        yr = 2*1.52/(self.norm_maxs[0] - self.norm_mins[0])
-        off_x = 2*(2.5-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(2.5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        #CBF
-        b = 1 - ((x[:,2:3] - off_y)/yr)**4 - ((x[:,3:4] - off_x)/xr)**4
-        Lfb = 0
-        Lgbu1 = -4*((x[:,2:3] - off_y)/yr)**3/yr
-        Lgbu2 = -4*((x[:,3:4] - off_x)/xr)**3/xr
-
-        self.safe1 = torch.min(b[:,0])
-
-        if t >= 10:
-            sign = 100   #relax
-        else:
-            sign = 0   #non-relax
-
-        rx0 = torch.zeros_like(Lgbu1).to(b.device)
-        rx1 = sign*torch.ones_like(Lgbu1).to(b.device)
-
-        G = torch.cat([-Lgbu1, -Lgbu2, rx1, rx0], dim = 1)
-        G = G.unsqueeze(1)
-        k = 1
-        h = Lfb + k*b
-
-        #normalize obstacle 2,  x = 1/12*np.sqrt(np.abs(np.cos(theta)))*np.sign(np.cos(theta)) + 5.3/12, y = 1/9*np.sqrt(np.abs(np.sin(theta)))*np.sign(np.sin(theta)) + 2/9
-        xr = 2*1.2/(self.norm_maxs[1] - self.norm_mins[1])
-        yr = 2*0.6/(self.norm_maxs[0] - self.norm_mins[0])
-        off_x = 2*(2-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(2.5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        #CBF
-        b = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - 1
-        Lfb = 0
-        Lgbu1 = 4*((x[:,2:3] - off_y)/yr)**3/yr
-        Lgbu2 = 4*((x[:,3:4] - off_x)/xr)**3/xr
-
-        self.safe2 = torch.min(b[:,0])
-
-        G1 = torch.cat([-Lgbu1, -Lgbu2, rx0, rx1], dim = 1)
-        G1 = G1.unsqueeze(1)
-        k = 1
-        h1 = Lfb + k*b
-
-        G = torch.cat([G, G1], dim = 1)
-        h = torch.cat([h, h1], dim = 1)
-        
-   
-        q = -ref[:,2:4].to(G.device)
-        q0 = torch.zeros_like(q).to(G.device)
-        q = torch.cat([q, q0], dim = 1)
-        Q = Variable(torch.eye(4))
-        Q = Q.unsqueeze(0).expand(nBatch, 4, 4).to(G.device)
-        
-        e = Variable(torch.Tensor())
-        out = QPFunction(verbose=-1, solver = QPSolvers.PDIPM_BATCHED)(Q, q, G, h, e, e)
-
-        rt = xp1.clone()      
-        rt[:,2:4] = x[:,2:4] + out[:,0:2]
-        rt = rt.unsqueeze(0)
-        return rt
-
-    @torch.no_grad()   #only for sampling
-    def invariance(self, x, xp1):    #  RoS-diffuser for maze2d-large-v1
-
-        x = x.squeeze(0)
-        xp1 = xp1.squeeze(0)
-
-        nBatch = x.shape[0]
-        ref = xp1 - x
-
-        #normalize obstacle 1, x-1, y-0  x = 1/12*np.cos(theta) + 5.5/12, y = 1/9*np.sin(theta) + 5/9
-        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
-        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
-        off_x = 2*(5.8-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        #CBF
-        b = ((x[:,2:3] - off_y)/yr)**2 + ((x[:,3:4] - off_x)/xr)**2 - 1 - 0.01  # robust term 09/25
-        Lfb = 0
-        Lgbu1 = 2*((x[:,2:3] - off_y)/yr)/yr
-        Lgbu2 = 2*((x[:,3:4] - off_x)/xr)/xr
-
-        G = torch.cat([-Lgbu1, -Lgbu2], dim = 1)
-        G = G.unsqueeze(1)
-        k = 1
-        h = Lfb + k*b
-
-        self.safe1 = torch.min(b[:,0] + 0.01)  # robust term 09/25
-
-        #normalize obstacle 2,  x = 1/12*np.sqrt(np.abs(np.cos(theta)))*np.sign(np.cos(theta)) + 5.3/12, y = 1/9*np.sqrt(np.abs(np.sin(theta)))*np.sign(np.sin(theta)) + 2/9
-        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
-        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
-        off_x = 2*(5.3-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(2-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        #CBF
-        b = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - 1 - 0.01 # robust term 09/25
-        Lfb = 0
-        Lgbu1 = 4*((x[:,2:3] - off_y)/yr)**3/yr
-        Lgbu2 = 4*((x[:,3:4] - off_x)/xr)**3/xr
-
-        self.safe2 = torch.min(b[:,0]+ 0.01) # robust term 09/25
-
-        G1 = torch.cat([-Lgbu1, -Lgbu2], dim = 1)
-        G1 = G1.unsqueeze(1)
-        k = 1
-        h1 = Lfb + k*b
-
-        G = torch.cat([G, G1], dim = 1)
-        h = torch.cat([h, h1], dim = 1)
-        
-   
-        q = -ref[:,2:4].to(G.device)
-        Q = Variable(torch.eye(2))
-        Q = Q.unsqueeze(0).expand(nBatch, 2, 2).to(G.device)
-        
-        e = Variable(torch.Tensor())
-        out = QPFunction(verbose=-1, solver = QPSolvers.PDIPM_BATCHED)(Q, q, G, h, e, e)
-
-        rt = xp1.clone()      
-        rt[:,2:4] = x[:,2:4] + out
-        # print(out)
-        rt = rt.unsqueeze(0)
-        return rt
-
-    @torch.no_grad()   #only for sampling
-    def invariance_cf(self, x, xp1):  # closed form solution,  RoS-diffuser for maze2d-large-v1
-
-        x = x.squeeze(0)
-        xp1 = xp1.squeeze(0)
-
-        nBatch = x.shape[0]
-        ref = xp1 - x
-
-        #normalize obstacle 1, x-1, y-0  x = 1/12*np.cos(theta) + 5.5/12, y = 1/9*np.sin(theta) + 5/9
-        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
-        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
-        off_x = 2*(5.8-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        #CBF
-        b0 = ((x[:,2:3] - off_y)/yr)**2 + ((x[:,3:4] - off_x)/xr)**2 - 1 - 0.01  # robust term 09/25
-        Lfb = 0
-        Lgbu1 = 2*((x[:,2:3] - off_y)/yr)/yr
-        Lgbu2 = 2*((x[:,3:4] - off_x)/xr)/xr
-
-        G0 = torch.cat([-Lgbu1, -Lgbu2], dim = 1)
-        k = 1
-        h0 = Lfb + k*b0
-
-        self.safe1 = torch.min(b0[:,0] + 0.01)  # robust term 09/25
-
-        #normalize obstacle 2,  x = 1/12*np.sqrt(np.abs(np.cos(theta)))*np.sign(np.cos(theta)) + 5.3/12, y = 1/9*np.sqrt(np.abs(np.sin(theta)))*np.sign(np.sin(theta)) + 2/9
-        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
-        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
-        off_x = 2*(5.3-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(2-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        #CBF
-        b = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - 1 - 0.01 # robust term 09/25
-        Lfb = 0
-        Lgbu1 = 4*((x[:,2:3] - off_y)/yr)**3/yr
-        Lgbu2 = 4*((x[:,3:4] - off_x)/xr)**3/xr
-
-        self.safe2 = torch.min(b[:,0]+ 0.01) # robust term 09/25
-
-        G1 = torch.cat([-Lgbu1, -Lgbu2], dim = 1)
-        k = 1
-        h1 = Lfb + k*b
-        
-        q = -ref[:,2:4].to(b.device)
-        
-        y1_bar = 1*G0  # H or Q = identity matrix
-        y2_bar = 1*G1
-        u_bar = -1*q
-        p1_bar = h0 - torch.sum(G0*u_bar,dim = 1).unsqueeze(1)
-        p2_bar = h1 - torch.sum(G1*u_bar,dim = 1).unsqueeze(1)
-
-        G = torch.cat([torch.sum(y1_bar*y1_bar,dim = 1).unsqueeze(1).unsqueeze(0), torch.sum(y1_bar*y2_bar,dim = 1).unsqueeze(1).unsqueeze(0), torch.sum(y2_bar*y1_bar,dim = 1).unsqueeze(1).unsqueeze(0), torch.sum(y2_bar*y2_bar,dim = 1).unsqueeze(1).unsqueeze(0)], dim = 0)
-        #G = 1*[y1_bar*y1_bar', y1_bar*y2_bar'; y2_bar*y1_bar', y2_bar*y2_bar']
-        w_p1_bar = torch.clamp(p1_bar, max=0)
-        w_p2_bar = torch.clamp(p2_bar, max=0)
-
-        # G 0-(1,1), 1-(1,2), 2-(2,1), 3-(2,2)
-        lambda1 = torch.where(G[2]*w_p2_bar < G[3]*p1_bar, torch.zeros_like(p1_bar), torch.where(G[1]*w_p1_bar < G[0]*p2_bar, w_p1_bar/G[0], torch.clamp(G[3]*p1_bar - G[2]*p2_bar, max=0)/(G[0]*G[3] - G[1]*G[2])))
-        
-        lambda2 = torch.where(G[2]*w_p2_bar < G[3]*p1_bar, w_p2_bar/G[3], torch.where(G[1]*w_p1_bar < G[0]*p2_bar, torch.zeros_like(p1_bar), torch.clamp(G[0]*p2_bar - G[1]*p1_bar, max=0)/(G[0]*G[3] - G[1]*G[2])))
-
-        out = lambda1*y1_bar + lambda2*y2_bar + u_bar
-        rt = xp1.clone()      
-        rt[:,2:4] = x[:,2:4] + out
-        # print(out)
-        rt = rt.unsqueeze(0)
-        return rt
-        
-
-
-
-    @torch.no_grad()   #only for sampling
-    def invariance_relax(self, x, xp1, t):  #  ReS-diffuser for maze2d-large-v1
-
-        x = x.squeeze(0)
-        xp1 = xp1.squeeze(0)
-
-        nBatch = x.shape[0]
-        ref = xp1 - x
-
-        #normalize obstacle 1, x-1, y-0  x = 1/12*np.cos(theta) + 5.5/12, y = 1/9*np.sin(theta) + 5/9
-        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
-        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
-        off_x = 2*(5.8-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        #CBF
-        b = ((x[:,2:3] - off_y)/yr)**2 + ((x[:,3:4] - off_x)/xr)**2 - 1 - 0.01
-        Lfb = 0
-        Lgbu1 = 2*((x[:,2:3] - off_y)/yr)/yr
-        Lgbu2 = 2*((x[:,3:4] - off_x)/xr)/xr
-
-        self.safe1 = torch.min(b[:,0] + 0.01)
-
-        if t >= 10:   # debug  10
-            sign = 100   #relax
-        else:
-            sign = 0   #non-relax
-
-        rx0 = torch.zeros_like(Lgbu1).to(b.device)
-        rx1 = sign*torch.ones_like(Lgbu1).to(b.device)
-
-        G = torch.cat([-Lgbu1, -Lgbu2, rx1, rx0], dim = 1)
-        G = G.unsqueeze(1)
-        k = 1
-        h = Lfb + k*b
-
-        #normalize obstacle 2,  x = 1/12*np.sqrt(np.abs(np.cos(theta)))*np.sign(np.cos(theta)) + 5.3/12, y = 1/9*np.sqrt(np.abs(np.sin(theta)))*np.sign(np.sin(theta)) + 2/9
-        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
-        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
-        off_x = 2*(5.3-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(2-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        #CBF
-        b = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - 1 - 0.01
-        Lfb = 0
-        Lgbu1 = 4*((x[:,2:3] - off_y)/yr)**3/yr
-        Lgbu2 = 4*((x[:,3:4] - off_x)/xr)**3/xr
-
-        self.safe2 = torch.min(b[:,0] + 0.01)
-
-        G1 = torch.cat([-Lgbu1, -Lgbu2, rx0, rx1], dim = 1)
-        G1 = G1.unsqueeze(1)
-        k = 1
-        h1 = Lfb + k*b
-
-        G = torch.cat([G, G1], dim = 1)
-        h = torch.cat([h, h1], dim = 1)
-        
-   
-        q = -ref[:,2:4].to(G.device)
-        q0 = torch.zeros_like(q).to(G.device)
-        q = torch.cat([q, q0], dim = 1)
-        Q = Variable(torch.eye(4))
-        Q = Q.unsqueeze(0).expand(nBatch, 4, 4).to(G.device)
-        
-        e = Variable(torch.Tensor())
-        out = QPFunction(verbose=-1, solver = QPSolvers.PDIPM_BATCHED)(Q, q, G, h, e, e)
-
-        rt = xp1.clone()      
-        rt[:,2:4] = x[:,2:4] + out[:,0:2]
-        rt = rt.unsqueeze(0)
-        return rt
-    
-    @torch.no_grad()   #only for sampling
-    def invariance_relax_cf(self, x, xp1, t):  # closed-form solution, ReS-diffuser for maze2d-large-v1
-
-        x = x.squeeze(0)
-        xp1 = xp1.squeeze(0)
-
-        nBatch = x.shape[0]
-        ref = xp1 - x
-
-        #normalize obstacle 1, x-1, y-0  x = 1/12*np.cos(theta) + 5.5/12, y = 1/9*np.sin(theta) + 5/9
-        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
-        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
-        off_x = 2*(5.8-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        #CBF
-        b = ((x[:,2:3] - off_y)/yr)**2 + ((x[:,3:4] - off_x)/xr)**2 - 1 - 0.01
-        Lfb = 0
-        Lgbu1 = 2*((x[:,2:3] - off_y)/yr)/yr
-        Lgbu2 = 2*((x[:,3:4] - off_x)/xr)/xr
-
-        self.safe1 = torch.min(b[:,0] + 0.01)
-
-        if t >= 10:   # debug  10
-            sign = 100   #relax
-        else:
-            sign = 0   #non-relax
-
-        rx0 = torch.zeros_like(Lgbu1).to(b.device)
-        rx1 = sign*torch.ones_like(Lgbu1).to(b.device)
-
-        G0 = torch.cat([-Lgbu1, -Lgbu2, rx1, rx0], dim = 1)
-        k = 1
-        h0 = Lfb + k*b
-
-        #normalize obstacle 2,  x = 1/12*np.sqrt(np.abs(np.cos(theta)))*np.sign(np.cos(theta)) + 5.3/12, y = 1/9*np.sqrt(np.abs(np.sin(theta)))*np.sign(np.sin(theta)) + 2/9
-        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
-        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
-        off_x = 2*(5.3-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(2-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        #CBF
-        b = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - 1 - 0.01
-        Lfb = 0
-        Lgbu1 = 4*((x[:,2:3] - off_y)/yr)**3/yr
-        Lgbu2 = 4*((x[:,3:4] - off_x)/xr)**3/xr
-
-        self.safe2 = torch.min(b[:,0] + 0.01)
-
-        G1 = torch.cat([-Lgbu1, -Lgbu2, rx0, rx1], dim = 1)
-        k = 1
-        h1 = Lfb + k*b
-        
-   
-        q = -ref[:,2:4].to(G0.device)
-        q0 = torch.zeros_like(q).to(G0.device)
-        q = torch.cat([q, q0], dim = 1)
-
-        y1_bar = 1*G0  # H or Q = identity matrix
-        y2_bar = 1*G1
-        u_bar = -1*q
-        p1_bar = h0 - torch.sum(G0*u_bar,dim = 1).unsqueeze(1)
-        p2_bar = h1 - torch.sum(G1*u_bar,dim = 1).unsqueeze(1)
-
-        G = torch.cat([torch.sum(y1_bar*y1_bar,dim = 1).unsqueeze(1).unsqueeze(0), torch.sum(y1_bar*y2_bar,dim = 1).unsqueeze(1).unsqueeze(0), torch.sum(y2_bar*y1_bar,dim = 1).unsqueeze(1).unsqueeze(0), torch.sum(y2_bar*y2_bar,dim = 1).unsqueeze(1).unsqueeze(0)], dim = 0)
-        #G = 1*[y1_bar*y1_bar', y1_bar*y2_bar'; y2_bar*y1_bar', y2_bar*y2_bar']
-        w_p1_bar = torch.clamp(p1_bar, max=0)
-        w_p2_bar = torch.clamp(p2_bar, max=0)
-
-        # G 0-(1,1), 1-(1,2), 2-(2,1), 3-(2,2)
-        lambda1 = torch.where(G[2]*w_p2_bar < G[3]*p1_bar, torch.zeros_like(p1_bar), torch.where(G[1]*w_p1_bar < G[0]*p2_bar, w_p1_bar/G[0], torch.clamp(G[3]*p1_bar - G[2]*p2_bar, max=0)/(G[0]*G[3] - G[1]*G[2])))
-        
-        lambda2 = torch.where(G[2]*w_p2_bar < G[3]*p1_bar, w_p2_bar/G[3], torch.where(G[1]*w_p1_bar < G[0]*p2_bar, torch.zeros_like(p1_bar), torch.clamp(G[0]*p2_bar - G[1]*p1_bar, max=0)/(G[0]*G[3] - G[1]*G[2])))
-
-        out = lambda1*y1_bar + lambda2*y2_bar + u_bar
-        rt = xp1.clone()    
-        rt[:,2:4] = x[:,2:4] + out[:,0:2]
-        # print(out)
-        rt = rt.unsqueeze(0)
-        return rt
-    
-
-    @torch.no_grad()   #only for sampling
-    def invariance_relax_narrow(self, x, xp1, t):  #  ReS-diffuser for maze2d-large-v1,  narrow passage case
-
-        x = x.squeeze(0)
-        xp1 = xp1.squeeze(0)
-
-        nBatch = x.shape[0]
-        ref = xp1 - x
-
-        if t >= 10:   # debug  10
-            sign = 1   #relax
-        else:
-            sign = 0   #non-relax
-
-        #normalize obstacle 1,  x = 1/12*np.sqrt(np.abs(np.cos(theta)))*np.sign(np.cos(theta)) + 5.3/12, y = 1/9*np.sqrt(np.abs(np.sin(theta)))*np.sign(np.sin(theta)) + 2/9
-        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
-        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
-
-        off_x = 2*(5.5-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(2-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        #CBF
-        b = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - 1 - 0.4  # 0.01
-        Lfb = 0
-        Lgbu1 = 4*((x[:,2:3] - off_y)/yr)**3/yr
-        Lgbu2 = 4*((x[:,3:4] - off_x)/xr)**3/xr
-
-        rx0 = torch.zeros_like(Lgbu1).to(b.device)
-        rx1 = sign*torch.ones_like(Lgbu1).to(b.device)
-
-        self.safe1 = torch.min(b[:,0] + 0.01)
-
-        G1 = torch.cat([-Lgbu1, -Lgbu2, rx1, rx0, rx0, rx0, rx0, rx0], dim = 1)
-        G1 = G1.unsqueeze(1)
-        k = 1
-        h1 = Lfb + k*b
-
-        ########################################### obs 2
-        off_x = 2*(5.5-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        #CBF
-        b2 = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - 1 - 0.6 #0.01
-        Lfb = 0
-        Lgbu12 = 4*((x[:,2:3] - off_y)/yr)**3/yr
-        Lgbu22 = 4*((x[:,3:4] - off_x)/xr)**3/xr
-
-        self.safe2 = torch.min(b2[:,0] + 0.01)
-
-        G2 = torch.cat([-Lgbu12, -Lgbu22, rx0, rx1, rx0, rx0, rx0, rx0], dim = 1)
-        G2 = G2.unsqueeze(1)
-        k = 1
-        h2 = Lfb + k*b2
-
-        ########################################### obs 3
-        off_x = 2*(3-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(2.5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        #CBF
-        b3 = ((x[:,2:3] - off_y)/yr/0.5)**4 + ((x[:,3:4] - off_x)/xr)**4 - 1 - 0.01
-        Lfb = 0
-        Lgbu13 = 4*((x[:,2:3] - off_y)/yr/0.5)**3/yr
-        Lgbu23 = 4*((x[:,3:4] - off_x)/xr)**3/xr
-
-        G3 = torch.cat([-Lgbu13, -Lgbu23, rx0, rx0, rx1, rx0, rx0, rx0], dim = 1)
-        G3 = G3.unsqueeze(1)
-        k = 1
-        h3 = Lfb + k*b3
-
-        ########################################### obs 4
-        off_x = 2*(8.5-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(3.5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        #CBF
-        b4 = ((x[:,2:3] - off_y)/yr/1.8)**4 + ((x[:,3:4] - off_x)/xr/1.8)**4 - 1 - 0.01
-        Lfb = 0
-        Lgbu14 = 4*((x[:,2:3] - off_y)/yr/1.8)**3/yr
-        Lgbu24 = 4*((x[:,3:4] - off_x)/xr/1.8)**3/xr
-
-        G4 = torch.cat([-Lgbu14, -Lgbu24, rx0, rx0, rx0, rx1, rx0, rx0], dim = 1)
-        G4 = G4.unsqueeze(1)
-        k = 1
-        h4 = Lfb + k*b4
-
-        ########################################### obs 5
-        off_x = 2*(7.6-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(7-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        #CBF
-        b5 = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - 1 - 0.4 #0.01
-        Lfb = 0
-        Lgbu15 = 4*((x[:,2:3] - off_y)/yr)**3/yr
-        Lgbu25 = 4*((x[:,3:4] - off_x)/xr)**3/xr
-
-        G5 = torch.cat([-Lgbu15, -Lgbu25, rx0, rx0, rx0, rx0, rx1, rx0], dim = 1)
-        G5 = G5.unsqueeze(1)
-        k = 1
-        h5 = Lfb + k*b5
-
-        ########################################### obs 6
-        off_x = 2*(10-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(6.3-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        #CBF
-        b6 = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - 1 - 0.01
-        Lfb = 0
-        Lgbu16 = 4*((x[:,2:3] - off_y)/yr)**3/yr
-        Lgbu26 = 4*((x[:,3:4] - off_x)/xr)**3/xr
-
-        G6 = torch.cat([-Lgbu16, -Lgbu26, rx0, rx0, rx0, rx0, rx0, rx1], dim = 1)
-        G6 = G6.unsqueeze(1)
-        k = 1
-        h6 = Lfb + k*b6
-
-        b0 = torch.cat([b, b2, b3, b4, b5, b6], dim = 1)
-        idx = torch.argmin(b0, dim = 1).cpu().numpy()
-        G0 = torch.cat([G1, G2, G3, G4, G5, G6], dim = 1)
-        h0 = torch.cat([h1, h2, h3, h4, h5, h6], dim = 1)
-        rows = len(G0[:,0,0])
-        G = []
-        h = []
-        for i in range(rows):
-            G.append(G0[i:i+1,idx[i]:idx[i]+1])
-            h.append(h0[i:i+1,idx[i]:idx[i]+1])
-        G = torch.cat(G, dim = 0)
-        h = torch.cat(h, dim = 0)
-
-
-        
-
-        # G = torch.cat([G1, G2, G3, G4, G5, G6], dim = 1)
-        # h = torch.cat([h1, h2, h3, h4, h5, h6], dim = 1)
-
-        # G = torch.cat([G1, G2, G3, G5], dim = 1)
-        # h = torch.cat([h1, h2, h3, h5], dim = 1)
-        
-   
-        q = -ref[:,2:4].to(G.device)
-        q0 = torch.zeros_like(q).to(G.device)
-        q = torch.cat([q, q0, q0, q0], dim = 1)
-        Q = Variable(torch.eye(8))
-        Q = Q.unsqueeze(0).expand(nBatch, 8, 8).to(G.device)
-        
-        e = Variable(torch.Tensor())
-        out = QPFunction(verbose=-1, solver = QPSolvers.PDIPM_BATCHED)(Q, q, G, h, e, e)
-
-        rt = xp1.clone()      
-        rt[:,2:4] = x[:,2:4] + out[:,0:2]
-        rt = rt.unsqueeze(0)
-        return rt
-
-
-    @torch.no_grad()   #only for sampling
-    def invariance_time(self, x, xp1, t):  #  TVS-diffuser for maze2d-large-v1
-        t_bias = 5  #50
-
-        x = x.squeeze(0)
-        xp1 = xp1.squeeze(0)
-
-        nBatch = x.shape[0]
-        ref = xp1 - x
-
-        #normalize obstacle 1, x-1, y-0  x = 1/12*np.cos(theta) + 5.5/12, y = 1/9*np.sin(theta) + 5/9
-        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
-        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
-        off_x = 2*(5.8-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        #CBF
-        b = ((x[:,2:3] - off_y)/yr)**2 + ((x[:,3:4] - off_x)/xr)**2 - nn.Sigmoid()(t_bias - t) -0.01
-        Lfb = nn.Sigmoid()(t_bias - t)*(1 - nn.Sigmoid()(t_bias - t))
-        Lgbu1 = 2*((x[:,2:3] - off_y)/yr)/yr
-        Lgbu2 = 2*((x[:,3:4] - off_x)/xr)/xr
-
-        self.safe1 = torch.min(b[:,0] + 0.01)
-
-        G = torch.cat([-Lgbu1, -Lgbu2], dim = 1)
-        G = G.unsqueeze(1)
-        k = 1  #0.3
-        h = Lfb + k*b
-
-        #normalize obstacle 2,  x = 1/12*np.sqrt(np.abs(np.cos(theta)))*np.sign(np.cos(theta)) + 5.3/12, y = 1/9*np.sqrt(np.abs(np.sin(theta)))*np.sign(np.sin(theta)) + 2/9
-        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
-        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
-        off_x = 2*(5.3-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(2-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        #CBF
-        b = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - nn.Sigmoid()(t_bias - t) - 0.01
-        Lfb = nn.Sigmoid()(t_bias - t)*(1 - nn.Sigmoid()(t_bias - t))
-        Lgbu1 = 4*((x[:,2:3] - off_y)/yr)**3/yr
-        Lgbu2 = 4*((x[:,3:4] - off_x)/xr)**3/xr
-
-        self.safe2 = torch.min(b[:,0] + 0.01)
-
-        G1 = torch.cat([-Lgbu1, -Lgbu2], dim = 1)
-        G1 = G1.unsqueeze(1)
-        k = 1  #0.4
-        h1 = Lfb + k*b
-
-        G = torch.cat([G, G1], dim = 1)
-        h = torch.cat([h, h1], dim = 1)
-        
-   
-        q = -ref[:,2:4].to(G.device)
-        Q = Variable(torch.eye(2))
-        Q = Q.unsqueeze(0).expand(nBatch, 2, 2).to(G.device)
-        
-        e = Variable(torch.Tensor())
-        out = QPFunction(verbose=-1, solver = QPSolvers.PDIPM_BATCHED)(Q, q, G, h, e, e)
-
-        rt = xp1.clone()      
-        rt[:,2:4] = x[:,2:4] + out
-        rt = rt.unsqueeze(0)
-        return rt
-
-    @torch.no_grad()   #only for sampling
-    def invariance_time_cf(self, x, xp1, t):  # closed-form solution, TVS-diffuser for maze2d-large-v1
-        t_bias = 5  #50 
-
-        x = x.squeeze(0)
-        xp1 = xp1.squeeze(0)
-
-        nBatch = x.shape[0]
-        ref = xp1 - x
-
-        #normalize obstacle 1, x-1, y-0  x = 1/12*np.cos(theta) + 5.5/12, y = 1/9*np.sin(theta) + 5/9
-        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
-        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
-        off_x = 2*(5.8-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        #CBF
-        b = ((x[:,2:3] - off_y)/yr)**2 + ((x[:,3:4] - off_x)/xr)**2 - nn.Sigmoid()(t_bias - t) -0.01
-        Lfb = nn.Sigmoid()(t_bias - t)*(1 - nn.Sigmoid()(t_bias - t))
-        Lgbu1 = 2*((x[:,2:3] - off_y)/yr)/yr
-        Lgbu2 = 2*((x[:,3:4] - off_x)/xr)/xr
-
-        self.safe1 = torch.min(b[:,0] + 0.01)
-
-        G0 = torch.cat([-Lgbu1, -Lgbu2], dim = 1)
-        k = 1  #0.3
-        h0 = Lfb + k*b
-
-        #normalize obstacle 2,  x = 1/12*np.sqrt(np.abs(np.cos(theta)))*np.sign(np.cos(theta)) + 5.3/12, y = 1/9*np.sqrt(np.abs(np.sin(theta)))*np.sign(np.sin(theta)) + 2/9
-        xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
-        yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
-        off_x = 2*(5.3-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2*(2-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        #CBF
-        b = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - nn.Sigmoid()(t_bias - t) - 0.01
-        Lfb = nn.Sigmoid()(t_bias - t)*(1 - nn.Sigmoid()(t_bias - t))
-        Lgbu1 = 4*((x[:,2:3] - off_y)/yr)**3/yr
-        Lgbu2 = 4*((x[:,3:4] - off_x)/xr)**3/xr
-
-        self.safe2 = torch.min(b[:,0] + 0.01)
-
-        G1 = torch.cat([-Lgbu1, -Lgbu2], dim = 1)
-        k = 1  #0.4
-        h1 = Lfb + k*b
-        
-   
-        q = -ref[:,2:4].to(G0.device)
-
-        y1_bar = 1*G0  # H or Q = identity matrix
-        y2_bar = 1*G1
-        u_bar = -1*q
-        p1_bar = h0 - torch.sum(G0*u_bar,dim = 1).unsqueeze(1)
-        p2_bar = h1 - torch.sum(G1*u_bar,dim = 1).unsqueeze(1)
-
-        G = torch.cat([torch.sum(y1_bar*y1_bar,dim = 1).unsqueeze(1).unsqueeze(0), torch.sum(y1_bar*y2_bar,dim = 1).unsqueeze(1).unsqueeze(0), torch.sum(y2_bar*y1_bar,dim = 1).unsqueeze(1).unsqueeze(0), torch.sum(y2_bar*y2_bar,dim = 1).unsqueeze(1).unsqueeze(0)], dim = 0)
-        #G = 1*[y1_bar*y1_bar', y1_bar*y2_bar'; y2_bar*y1_bar', y2_bar*y2_bar']
-        w_p1_bar = torch.clamp(p1_bar, max=0)
-        w_p2_bar = torch.clamp(p2_bar, max=0)
-
-        # G 0-(1,1), 1-(1,2), 2-(2,1), 3-(2,2)
-        lambda1 = torch.where(G[2]*w_p2_bar < G[3]*p1_bar, torch.zeros_like(p1_bar), torch.where(G[1]*w_p1_bar < G[0]*p2_bar, w_p1_bar/G[0], torch.clamp(G[3]*p1_bar - G[2]*p2_bar, max=0)/(G[0]*G[3] - G[1]*G[2])))
-        
-        lambda2 = torch.where(G[2]*w_p2_bar < G[3]*p1_bar, w_p2_bar/G[3], torch.where(G[1]*w_p1_bar < G[0]*p2_bar, torch.zeros_like(p1_bar), torch.clamp(G[0]*p2_bar - G[1]*p1_bar, max=0)/(G[0]*G[3] - G[1]*G[2])))
-
-        out = lambda1*y1_bar + lambda2*y2_bar + u_bar
-        rt = xp1.clone()    
-        rt[:,2:4] = x[:,2:4] + out
-        # print(out)
-        rt = rt.unsqueeze(0)
-        return rt        
 
     @torch.no_grad()
     def p_sample(self, x, cond, t):
