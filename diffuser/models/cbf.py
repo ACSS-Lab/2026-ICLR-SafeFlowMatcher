@@ -19,70 +19,107 @@ class CBF:
         # Precompute normalization factors
         self.xr = 2 / (self.norm_maxs[1] - self.norm_mins[1])
         self.yr = 2 / (self.norm_maxs[0] - self.norm_mins[0])
-
+    
     @torch.no_grad()
-    def compute_cbf_circle(self, x, center, radius):
-        # Normalize center just once clearly
-        off_x = 2 * (center[0] - 0.5 - self.norm_mins[1]) / (self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2 * (center[1] - 0.5 - self.norm_mins[0]) / (self.norm_maxs[0] - self.norm_mins[0]) - 1
+    def compute_cbf_constraint_robust(self, order, dx, dy):
+        """
+        Robust CBF constraint for n-th order CBFs.
+        """
+        if order < 1:
+            raise ValueError("Order must be at least 1")
+        
+        b = dy**order + dx**order - 1 - self.robust_term
+        L1 = order * dy**(order-1) / self.yr
+        L2 = order * dx**(order-1) / self.xr
 
-        diff_y = (x[:, 2:3] - off_y) / self.yr
-        diff_x = (x[:, 3:4] - off_x) / self.xr
-
-        b = diff_y**2 + diff_x**2 - 1 - self.robust_term
-        Lgbu1 = 2 * diff_y / self.yr
-        Lgbu2 = 2 * diff_x / self.xr
-
-        G = torch.stack([-Lgbu1, -Lgbu2], dim=-1)
+        G = torch.cat([-L1, -L2], dim=1).unsqueeze(1)
         h = b
         safe = torch.min(b + self.robust_term)
-
-        return G, h, safe
-
-    @torch.no_grad()
-    def compute_cbf_4th_order(self, x, center, radius):
-        # Normalize center once clearly
-        off_x = 2 * (center[0] - 0.5 - self.norm_mins[1]) / (self.norm_maxs[1] - self.norm_mins[1]) - 1
-        off_y = 2 * (center[1] - 0.5 - self.norm_mins[0]) / (self.norm_maxs[0] - self.norm_mins[0]) - 1
-
-        diff_y = (x[:, 2:3] - off_y) / self.yr
-        diff_x = (x[:, 3:4] - off_x) / self.xr
-
-        b = diff_y**4 + diff_x**4 - 1 - self.robust_term
-        Lgbu1 = 4 * diff_y**3 / self.yr
-        Lgbu2 = 4 * diff_x**3 / self.xr
-
-        G = torch.stack([-Lgbu1, -Lgbu2], dim=-1)
-        h = b
-        safe = torch.min(b + self.robust_term)
-
+        
         return G, h, safe
     
     @torch.no_grad()
-    def solve_qp(self, ref, G, h):
-        q = -ref[:, 2:4].to(self.device)
-        Q = torch.eye(2, device=self.device).unsqueeze(0).expand(ref.size(0), -1, -1)
-        e = torch.empty(0, device=self.device)
-        return QPFunction(verbose=-1, solver=QPSolvers.PDIPM_BATCHED)(Q, q, G, h, e, e)
-
-    def solve_qp_relax(self, ref, G, h):
+    def compute_cbf_constriant_relax(self, order, dx, dy, t, sign):
         """
-        QP with relaxation variables r1, r2 (dim=4)
+        Robust CBF constraint for n-th order CBFs.
+        """
+        if order < 1:
+            raise ValueError("Order must be at least 1")
+        
+        b = dy**order + dx**order - 1 - self.robust_term
+        L1 = order * dy**(order-1) / self.yr
+        L2 = order * dx**(order-1) / self.xr
+
+        rx0 = torch.zeros_like(L1)
+        rx1 = sign * torch.ones_like(L1)
+        G = torch.cat([-L1, -L2, rx1, rx0], dim=1).unsqueeze(1)
+        h = b
+        safe = torch.min(b + self.robust_term)
+
+        return G, h, safe
+
+    @torch.no_grad()
+    def compute_cbf_constraint_time_varying(self, order, dx, dy, t, t_bias, a):
+        """
+        Time-varying CBF constraint for n-th order CBFs.
+        """
+        if order < 1:
+            raise ValueError("Order must be at least 1")
+        
+        s = torch.sigmoid(a*(t - t_bias))  # scalar
+        Lfb = a * s * (1 - s)              # time-varying Lie derivative approx.
+
+        b  = dy**order + dx**order - s - self.robust_term
+        L1 = order * dy**(order-1) / self.yr
+        L2 = order * dx**(order-1) / self.xr
+
+        G = torch.cat([-L1, -L2], dim=1).unsqueeze(1)
+        h = Lfb + b
+        safe = torch.min(b + self.robust_term)
+        return G, h, safe
+    
+    @torch.no_grad()
+    def solve_qp(self, u_ref, G, h):
+        """
+        GP (total dim=2)
+        min ‖u - u_ref‖²
+        s.t. G u ≤ h
+        """
+        q = -u_ref[:, 2:4].to(self.device)      # [B, 2]: position increment vector -(Δx, Δy)
+        
+        Q = torch.eye(2, device=self.device).unsqueeze(0).expand(u_ref.size(0), -1, -1) # Weight matrix, I
+        e = torch.empty(0, device=self.device)  # no equality constraints
+
+        out = QPFunction(verbose=-1, solver=QPSolvers.PDIPM_BATCHED)(Q, q, G, h, e, e)
+        return out
+
+    def solve_qp_relax(self, u_ref, G, h):
+        """
+        QP with relaxation variables r1, r2 (total dim=4)
         min ‖u - u_ref‖²
         s.t. G [u; r] ≤ h
         """
-        u_bar = ref[:, 2:4]                     # [B, 2]
-        q_u = -u_bar                            # [B, 2]
+        q_u = -u_ref[:, 2:4]                    # [B, 2]: position increment vector -(Δx, Δy)
         q_r = torch.zeros_like(q_u)             # [B, 2]
         q = torch.cat([q_u, q_r], dim=1)        # [B, 4]
 
-        Q = torch.eye(4, device=self.device).unsqueeze(0).expand(ref.size(0), 4, 4)
-        e = torch.empty(0, device=self.device)
+        Q = torch.eye(4, device=self.device).unsqueeze(0).expand(u_ref.size(0), 4, 4) # Weight matrix, Is
+        e = torch.empty(0, device=self.device)  # no equality constraints
 
-        # G: [B, num_obs, 4], h: [B, num_obs]
         out = QPFunction(verbose=-1, solver=QPSolvers.PDIPM_BATCHED)(Q, q, G, h, e, e)
+        return out
+    
+    def solve_closed_form(self, ref, G, h):
+        """
+        Closed-form solution for the CBF QP.
+        """
+        pass
 
-        return out  # includes relaxation; only u part will be used
+    def solve_closed_from_relax(self, ref, G, h):
+        """
+        Closed-form solution for the CBF QP with relaxation.
+        """
+        pass
 
     @torch.no_grad()
     def apply(self, x, xp1, t=None):
@@ -105,59 +142,26 @@ class CBF:
             dy = (x[:,2:3] - off_y)/self.yr   # [B,1]
             dx = (x[:,3:4] - off_x)/self.xr   # [B,1]
 
-            if self.cbf_method == 'time':
-                # Time-varying CBF (TVS)
-                t_bias = self.relax_threshold
-                t_bias = 0.90  # e.g., 0.5 if normalized t ∈ [0, 1]
-                a = 1
-                s = torch.sigmoid(a*(t - t_bias))  # scalar
-                Lfb = a * s * (1 - s)              # time-varying Lie derivative approx.
-                # s = torch.sigmoid(a*(t_bias - t))
-                # Lfb = a * s * (1 - s)             # time-varying Lie derivative approx.
-                # t_bias = 5  # diffuser
-                # s = torch.sigmod(t_bias-t)  # scalar
-                # Lfb = -s * (1-s)
+            # Parameters for CBF
+            # Relax
+            a = 1
+            sign = 100.0 if (t is not None and t <= self.relax_threshold) else 0.0
+            # Time-varying
+            t_bias = self.relax_threshold
+            t_bias = 0.90
 
-                if obs['type'] == 'circle':
-                    b = dy**2 + dx**2 - s - self.robust_term
-                    L1 = 2 * dy / self.yr
-                    L2 = 2 * dx / self.xr
-                elif obs['type'] == '4th':
-                    b = dy**4 + dx**4 - s - self.robust_term
-                    L1 = 4 * dy**3 / self.yr
-                    L2 = 4 * dx**3 / self.xr
-                else:
-                    continue
-
-                G_i = torch.cat([-L1, -L2], dim=1).unsqueeze(1)
-                h_i = Lfb + b
+            if self.cbf_method == 'robust':
+                G_i, h_i, safe_i = self.compute_cbf_constraint_robust(obs['order'], dx, dy)
+            elif self.cbf_method == 'relax':
+                G_i, h_i, safe_i = self.compute_cbf_constriant_relax(obs['order'], dx, dy, t, sign)
+            elif self.cbf_method == 'time':
+                G_i, h_i, safe_i = self.compute_cbf_constraint_time_varying(obs['order'], dx, dy, t, t_bias, a)
             else:
-                if obs['type'] == 'circle':
-                    b      = dy**2 + dx**2 - 1 - self.robust_term
-                    L1     = 2*dy**1 / self.yr
-                    L2     = 2*dx**1 / self.xr
-                elif obs['type'] == '4th':
-                    b      = dy**4 + dx**4 - 1 - self.robust_term
-                    L1     = 4*dy**3 / self.yr
-                    L2     = 4*dx**3 / self.xr
-                else:
-                    continue
-
-                if self.cbf_method == 'relax':
-                    # add relax term: [rx1, rx0] or [0, sign]
-                    sign = 100.0 if (t is not None and t <= self.relax_threshold) else 0.0
-                    rx0 = torch.zeros_like(L1)
-                    rx1 = sign * torch.ones_like(L1)
-                    G_i = torch.cat([-L1, -L2, rx1, rx0], dim=1).unsqueeze(1)
-                    h_i = b
-                else:
-                    # G_i: [B,1,2], h_i: [B,1]
-                    G_i = torch.cat([-L1, -L2], dim=1).unsqueeze(1)
-                    h_i = b
+                raise ValueError(f"Unknown CBF method '{self.cbf_method}'")
 
             G_list.append(G_i)
             h_list.append(h_i)
-            safe_vals.append(torch.min(b + self.robust_term))
+            safe_vals.append(safe_i)
 
         # if you have no obstacles, just apply the reference control
         if not G_list:
@@ -167,7 +171,7 @@ class CBF:
             h = torch.cat(h_list, dim=1)  # [B, num_obs]
 
             if self.cbf_solver == 'qp':
-                if self.cbf_method == 'normal':
+                if self.cbf_method == 'robust':
                     out = self.solve_qp(ref, G, h)
                 elif self.cbf_method == 'relax':
                     out = self.solve_qp_relax(ref, G, h)
