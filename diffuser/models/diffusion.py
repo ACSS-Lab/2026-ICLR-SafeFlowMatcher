@@ -1160,21 +1160,21 @@ class GaussianDiffusion(nn.Module):
         if return_diffusion: diffusion = [x]
 
         progress = utils.Progress(self.n_timesteps) if verbose else utils.Silent()
-        # safe1, safe2 = [], []
+        safe1, safe2 = [], []
         for i in reversed(range(0, self.n_timesteps)):  #-50 change here for the number of diffusion steps,
             if i < 0:
                 i = 0
             timesteps = torch.full((batch_size,), i, device=device, dtype=torch.long)
             x = self.p_sample(x, cond, timesteps)
             x = apply_conditioning(x, cond, self.action_dim)
-            # safe1.append(self.safe1.unsqueeze(0))
-            # safe2.append(self.safe2.unsqueeze(0))
+            safe1.append(self.safe1.unsqueeze(0))
+            safe2.append(self.safe2.unsqueeze(0))
             progress.update({'t': i})
 
             if return_diffusion: diffusion.append(x)
         
-        # self.safe1 = torch.cat(safe1, dim=0)
-        # self.safe2 = torch.cat(safe2, dim=0)
+        self.safe1 = torch.cat(safe1, dim=0)
+        self.safe2 = torch.cat(safe2, dim=0)
 
         progress.close()
         # pdb.set_trace()
