@@ -38,6 +38,9 @@ class CFM(nn.Module):
         loss_weights = self.get_loss_weights(action_weight, loss_discount, loss_weights)
         self.loss_fn = Losses[loss_type](loss_weights, self.action_dim)
 
+        # One-shot initialization
+        self.one_shot_enabled = False
+
         # Safety
         self.safety_enabled = False
         self.cbf = None
@@ -184,24 +187,29 @@ class CFM(nn.Module):
         Solve ODE planning with explicit control-corrected RHS (e.g., CBF applied)
         """
         # ================ one-shot initialization ================
-        batch_size = len(cond[0])
-        x0 = torch.randn(shape).to(self.device)
-        x0 = apply_conditioning(x0, cond, self.action_dim)
-        
-        # Obtain velocity field for one-shot
-        t_batch = torch.zeros((batch_size,), device=self.device) # same with torch.full((x.shape[0],), t=0, device=x.device)
-        v0 = self.model(x0, None, t_batch) 
+        if self.one_shot_enabled:
+            batch_size = len(cond[0])
+            x0_1st_phase = torch.randn(shape).to(self.device)
+            x0_1st_phase = apply_conditioning(x0_1st_phase, cond, self.action_dim)
+            
+            # Obtain velocity field for one-shot
+            t_batch = torch.zeros((batch_size,), device=self.device) # same with torch.full((x.shape[0],), t=0, device=x.device)
+            v0 = self.model(x0_1st_phase, None, t_batch) 
 
-        # Obtain one-shot prediction (1-step Euler)
-        x1_pred = x0.clone()
-        x1_pred = x0 + v0
+            # Obtain one-shot prediction (1-step Euler)
+            x1_pred = x0_1st_phase.clone()
+            x1_pred = x0_1st_phase + v0
+            
+            x0_2nd_phase = x1_pred
+        # ================ Multi-step Planning ================
+        else:
+            x0_2nd_phase = torch.randn(shape).to(self.device)
 
-        # ================ N_step Planning ================
-        x0_one_shot = apply_conditioning(x1_pred, cond, self.action_dim)
+        x0_2nd_phase = apply_conditioning(x0_2nd_phase, cond, self.action_dim)
 
         T = self.n_timesteps + 1
         time = torch.linspace(0, 1, T).to(self.device)
-        traj = [x0_one_shot]
+        traj = [x0_2nd_phase]
 
         for i in range(1, T):
             # print(f"{i}-th iter / {T} (time: {t_act1 - t_start:.2f}s)", end="\r")

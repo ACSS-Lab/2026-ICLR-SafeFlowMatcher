@@ -23,6 +23,8 @@ class Policy:
         norm_mins = torch.tensor(normalizer.normalizers['observations'].mins, device=device)
         norm_maxs = torch.tensor(normalizer.normalizers['observations'].maxs, device=device)
 
+        self.diffusion_model.one_shot_enabled = args.one_shot_enabled
+
         self.diffusion_model.safety_enabled = True
         self.diffusion_model.cbf = CBF(norm_mins, norm_maxs, args)
 
