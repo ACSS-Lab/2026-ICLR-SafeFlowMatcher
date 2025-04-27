@@ -13,11 +13,14 @@ class CBF:
         self.obstacles = args.obstacles
         self.cbf_solver = args.cbf_solver
         self.cbf_method = args.cbf_method
+        self.action_dim = 2
+        
+        # Parameters for CBF
+        self.alpha = 0.5
+        self.rho = 1
+
         self.robust_term = args.robust_term
         self.relax_threshold = args.relax_threshold
-        self.action_dim = 2
-
-        # Parameters for CBF
         self.a = 100
         self.t_bias = 0.90
 
@@ -34,32 +37,52 @@ class CBF:
         dy = (x[:,2:3] - off_y) / self.yr
         order = obs['order']
 
+        # b(x)
         b = dy**order + dx**order - 1 - self.robust_term
+
+        # Lie derivative
         L1 = order * dy**(order-1) / self.yr
         L2 = order * dx**(order-1) / self.xr
-        Lfb = 0
-        k = 1
+
+        # Finite-time parameter
+        alpha = self.alpha
+        rho = self.rho
+        delta = self.robust_term
 
         if self.cbf_method == 'robust':
             G = torch.cat([-L1, -L2], dim=1).unsqueeze(1)
 
+            b = dy**order + dx**order - 1
+            finite_time_term = torch.sign(b - delta) * torch.abs(b - delta)**rho
+            h = alpha * finite_time_term
+
         elif self.cbf_method == 'relax':
-            sign = 100.0 if (t is not None and t <= self.relax_threshold) else 0.0
-            rx1 = sign * torch.ones_like(L1)
-            rx0 = torch.zeros_like(L1)
-            G = torch.cat([-L1, -L2, rx1, rx0], dim=1).unsqueeze(1)
+            sign = 10.0 if (t is not None and t <= self.relax_threshold) else 0.0
+            # if t <= self.relax_threshold:
+            #     sign = 1.0 * (1 - t / self.relax_threshold)
+            # else:
+            #     sign = 0.0
+
+            rx = sign * torch.ones_like(L1)
+            G = torch.cat([-L1, -L2, rx], dim=1).unsqueeze(1)
+
+            b = dy**order + dx**order - 1
+            finite_time_term = torch.sign(b - delta) * torch.abs(b - delta)**rho
+            h = alpha * finite_time_term
 
         elif self.cbf_method == 'time':
-            s = torch.sigmoid(self.a * (t - self.t_bias))
-            Lfb = self.a * s * (1 - s)
-            b = dy**order + dx**order - s - self.robust_term
             G = torch.cat([-L1, -L2], dim=1).unsqueeze(1)
+
+            s = torch.sigmoid(self.a * (t - self.t_bias))
+            ds = self.a * s * (1 - s)
+            b = dy**order + dx**order - s
+            finite_time_term = torch.sign(b - delta) * torch.abs(b - delta)**rho
+            h = ds + alpha * finite_time_term
 
         else:
             raise ValueError(f"Unknown CBF method {self.cbf_method}")
 
-        h = Lfb + k * b
-        safe = torch.min(b + self.robust_term)
+        safe = torch.min(b + delta)
         return G, h, safe
     
     @torch.no_grad()
@@ -74,10 +97,10 @@ class CBF:
             Q = torch.eye(2, device=self.device).unsqueeze(0).expand(u_ref.size(0), 2, 2)
         elif method == 'relax':
             q_u = -u_ref[:, 2:4]      # [B, 2]: desired move -(Δx, Δy)
-            q_r = torch.zeros_like(u_ref[:, 2:4])  # [B, 2]
-            q = torch.cat([q_u, q_r], dim=1)       # [B, 4]
+            q_r = torch.zeros_like(q_u[:, :1])  # [B, 2]
+            q = torch.cat([q_u, q_r], dim=1)       # [B, 3]
 
-            Q = torch.eye(4, device=self.device).unsqueeze(0).expand(u_ref.size(0), 4, 4)
+            Q = torch.eye(3, device=self.device).unsqueeze(0).expand(u_ref.size(0), 3, 3)
         else:
             raise ValueError(f"Unknown method {method}")
                 
@@ -102,7 +125,7 @@ class CBF:
             u_bar = u_ref[:, 2:4]   # [B, 2] desired move
         elif method == 'relax':
             u = u_ref[:, 2:4]   # [B, 2] desired move
-            u_relax = torch.zeros_like(u)
+            u_relax = torch.zeros_like(u[:, :1])
             u_bar = torch.cat([u, u_relax], dim=1)  # [B, 4]
         else:
             raise ValueError(f"Unknown method {method}")
