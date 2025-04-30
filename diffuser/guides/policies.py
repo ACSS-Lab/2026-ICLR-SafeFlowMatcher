@@ -61,28 +61,32 @@ class Policy:
         self.diffusion_model.norm_maxs = self.normalizer.normalizers['observations'].maxs
         sample, diffusion = self.diffusion_model(conditions)
 
+        #calc trap1 trap2####################################################
+        trap1, trap2 = utils.local_trap(diffusion, self.diffusion_model.cbf, batch_idx=0, n_timesteps=255)
+        
+
         #if get elbo/NLL####################################################for elbo/NLL
-        # import pickle
-        # with open('./diffuser.pkl', 'rb') as f:  # load a data from diffuser as a baseline
-        #     data = pickle.load(f)
-        # diffuser_state = torch.tensor(data['gt']).float().to(self.device) 
-        # f.close()
-        # diff_num = diffusion.shape[1]
-        # elbo = []
-        # sum_elbo = 0
-        # for step in range(0, diff_num-2, 1):
-        #     timesteps = torch.full((batch_size,), diff_num-2 - step, device=self.device, dtype=torch.long)
-        #     elboi = self.diffusion_model._vb_terms_bpd(diffuser_state, conditions, diffusion[:,step,:,:], timesteps)
-        #     sum_elbo = sum_elbo + elboi
-        #     elbo.append(elboi)
-        # sum_elbo = sum_elbo.detach().cpu().numpy()[0]/255  #ave
-        #else#####################################################################
+        import pickle
+        with open('./diffuser.pkl', 'rb') as f:  # load a data from diffuser as a baseline
+            data = pickle.load(f)
+        diffuser_state = torch.tensor(data['gt']).float().to(self.device) 
+        f.close()
+        diff_num = diffusion.shape[1]
+        elbo = []
         sum_elbo = 0
+        for step in range(0, diff_num-2, 1):
+            timesteps = torch.full((batch_size,), diff_num-2 - step, device=self.device, dtype=torch.long)
+            elboi = self.diffusion_model._vb_terms_bpd(diffuser_state, conditions, diffusion[:,step,:,:], timesteps)
+            sum_elbo = sum_elbo + elboi
+            elbo.append(elboi)
+        sum_elbo = sum_elbo.detach().cpu().numpy()[0]/255  #ave
+        #else#####################################################################
+        # sum_elbo = 0
         #end#########################################################################
 
 
-        # # print('ELBO:', elbo)
-        # # print('ELBO ave:', sum_elbo/255)
+        # print('ELBO:', elbo)
+        # print('ELBO ave:', sum_elbo/255)
         #######################################################################
         
         sample = utils.to_np(sample)
@@ -123,6 +127,6 @@ class Policy:
         # observations = np.concatenate([observation_np[:,None], next_observations], axis=1)
 
         trajectories = Trajectories(actions, observations)
-        return action, trajectories, diffusions, self.diffusion_model.safe1, self.diffusion_model.safe2, sum_elbo
+        return action, trajectories, diffusions, self.diffusion_model.safe1, self.diffusion_model.safe2, sum_elbo, trap1, trap2
         # else:
         #     return action

@@ -11,6 +11,9 @@ imgs/
 analy_*
 trajectory_segments.png
 
+# Model
+diffuser.pkl
+
 gym/
 mujoco-py/
 =0.3.5
