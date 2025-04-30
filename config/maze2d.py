@@ -200,6 +200,9 @@ maze2d_large_v1 = {
         'horizon': 384,
         'n_diffusion_steps': 256,  # 256 debug
 
+        # Safety enabled
+        'safety_enabled': True,  # True, False
+
         # One Shot Initialization
         'one_shot_enabled': True,  # True, False
 

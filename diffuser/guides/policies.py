@@ -25,7 +25,7 @@ class Policy:
 
         self.diffusion_model.one_shot_enabled = args.one_shot_enabled
 
-        self.diffusion_model.safety_enabled = True
+        self.diffusion_model.safety_enabled = args.safety_enabled
         self.diffusion_model.cbf = CBF(norm_mins, norm_maxs, args)
 
     @property
