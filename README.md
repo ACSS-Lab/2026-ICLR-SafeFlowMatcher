@@ -8,7 +8,7 @@ conda env create -f environment.yml
 conda activate safe_cfm
 pip install -e .
 pip install qpth cvxpy cvxopt
-pip install torchdyn torchdiffeq
+pip install torchdyn torchdiffeq torchcfm
 pip install git+https://github.com/atong01/conditional-flow-matching.git
 ```
 
@@ -71,13 +71,13 @@ The --logbase points the experiment loader to the folder containing the pretrain
 Maze2d (Conditional Flow Matching):
 
 ```
-python scripts/train.py --config config.maze2d --method cfm --dataset maze2d-large-v1
+python scripts/train.py --config config.maze2d --dataset maze2d-large-v1 --method cfm
 ```
 
 Maze2d (Diffuser):
 
 ```
-python scripts/train.py --config config.maze2d --method base --dataset maze2d-large-v1
+python scripts/train.py --config config.maze2d --dataset maze2d-large-v1 --method base
 ```
 
 Locomotion:
@@ -105,13 +105,13 @@ See locomotion:values for the corresponding default hyperparameters.
 Maze2d (Conditional Flow Matching):
 
 ```
-python scripts/plan_maze2d.py --config config.maze2d --method cfm --dataset maze2d-large-v1 --logbase logs
+python scripts/plan_maze2d.py --config config.maze2d --dataset maze2d-large-v1 --logbase logs --method cfm
 ```
 
 Maze2d (Diffuser):
 
 ```
-python scripts/plan_maze2d.py --config config.maze2d --method base --dataset maze2d-large-v1 --logbase logs
+python scripts/plan_maze2d.py --config config.maze2d --dataset maze2d-large-v1 --logbase logs --method base
 ```
 
 Locomotion:
