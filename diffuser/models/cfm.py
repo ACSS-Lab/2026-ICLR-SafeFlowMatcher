@@ -266,8 +266,7 @@ class CFM(nn.Module):
         traj_tensor = torch.stack(traj, dim=1)  # [T, B, H, D]
 
         if record_traj:
-            # return traj_tensor[:,T-1,:,:], traj_tensor, [iter_time/self.n_timesteps, OSI_time]  # sample, diffusion_paths, [mean_iter_time, OSI_time]
-            return traj_tensor[:,T-1,:,:], traj_tensor  # sample, diffusion_paths
+            return traj_tensor[:,T-1,:,:], traj_tensor, [iter_time/self.n_timesteps]  # sample, diffusion_paths, avg_iter_time
         else:
             return traj_tensor[:,T-1,:,:]               # just sample
 

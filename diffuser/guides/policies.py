@@ -48,8 +48,6 @@ class Policy:
         return conditions
 
     def __call__(self, conditions, debug=False, batch_size=1):
-
-
         conditions = self._format_conditions(conditions, batch_size)
 
         ## batchify and move to tensor [ batch_size x observation_dim ]
@@ -59,17 +57,11 @@ class Policy:
         ## run reverse diffusion process
         self.diffusion_model.norm_mins = self.normalizer.normalizers['observations'].mins
         self.diffusion_model.norm_maxs = self.normalizer.normalizers['observations'].maxs
-        output = self.diffusion_model(conditions)
-        if len(output) == 2:
-            sample, diffusion = output
-        elif len(output) == 3:
-            sample, diffusion, _ = output
-        else:
-            raise ValueError("Unexpected number of outputs from diffusion_model")
+        sample, diffusion, iter_time = self.diffusion_model(conditions)
 
         #calc trap1 trap2####################################################
         # trap1, trap2 = utils.local_trap(diffusion, self.diffusion_model.cbf, batch_idx=0, n_timesteps=255)
-        
+        trap1, trap2 = 0, 0
 
         #if get elbo/NLL (diffuser) ####################################################for elbo/NLL
         # import pickle
@@ -93,22 +85,8 @@ class Policy:
         sum_elbo = 0
         #end#########################################################################
 
-
-        # print('ELBO:', elbo)
-        # print('ELBO ave:', sum_elbo/255)
-        #######################################################################
-        
         sample = utils.to_np(sample)
         diffusion = utils.to_np(diffusion)
-
-        
-        #####################################################for elbo, # save a data from diffuser as a baseline
-        # data = {'gt': diffusion[:,-1,:,:]}
-        # import pickle
-        # output = open('./diffuser.pkl', 'wb') 
-        # pickle.dump(data, output)
-        # output.close()
-        #######################################################################
 
         ## extract action [ batch_size x horizon x transition_dim ]
         actions = sample[:, :, :self.action_dim]
@@ -125,18 +103,5 @@ class Policy:
         normed_diffusion = diffusion[:,:,:,self.action_dim:]
         diffusions = self.normalizer.unnormalize(normed_diffusion, 'observations')
 
-        # if deltas.shape[-1] < observation.shape[-1]:
-        #     qvel_dim = observation.shape[-1] - deltas.shape[-1]
-        #     padding = np.zeros([*deltas.shape[:-1], qvel_dim])
-        #     deltas = np.concatenate([deltas, padding], axis=-1)
-
-        # ## [ batch_size x horizon x observation_dim ]
-        # next_observations = observation_np + deltas.cumsum(axis=1)
-        # ## [ batch_size x (horizon + 1) x observation_dim ]
-        # observations = np.concatenate([observation_np[:,None], next_observations], axis=1)
-
         trajectories = Trajectories(actions, observations)
-        # return action, trajectories, diffusions, self.diffusion_model.safe1, self.diffusion_model.safe2, sum_elbo, trap1, trap2
-        return action, trajectories, diffusions, self.diffusion_model.safe1, self.diffusion_model.safe2, sum_elbo
-        # else:
-        #     return action
+        return action, trajectories, diffusions, self.diffusion_model.safe1, self.diffusion_model.safe2, sum_elbo, trap1, trap2, iter_time

@@ -2,6 +2,8 @@ import json
 import numpy as np
 from os.path import join
 import pdb
+import csv
+import time
 import os
 
 from diffuser.guides.policies import Policy
@@ -50,16 +52,28 @@ def smooth(diffusion):
     
     return diffusion_copy
 
+# --------------------------------- csv header ----------------------------------#
+# save results to csv file
+csv_path = join(args.savepath, 'results.csv')
+os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+if not os.path.exists(csv_path):
+    with open(csv_path, 'w', newline='') as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(['iter', 'safe1', 'safe2', 'trap1', 'trap2', 'score', 'itertime', 'success'])
+
 #---------------------------------- main loop ----------------------------------#
 safe1_batch, safe2_batch = [], []
 score_batch = []
-comp_time = []
+compute_time = []
 elbo_batch = []
-# trap1_batch, trap2_batch = 0, 0
-success = 0
-import time
-for iter in range(1):   # num of testing runs
-    print("step: ", iter, "/100")
+num_trap1, num_trap2 = 0, 0
+num_success = 0
+iter_time_batch = []
+test_num = 1
+
+TOTAL_TEST_RUN = 2
+for iter in range(TOTAL_TEST_RUN):   # num of testing runs
+    print("step: ", iter, f"/{test_num}")
 
     observation = env.reset()    #array([ 0.94875744,  8.93648809, -0.01347715,  0.06358764])
     observation = np.array([ 0.94875744,  2.93648809, -0.01347715,  0.06358764])   # fix the initial position and final destination for comparison (not needed for general testing)
@@ -88,68 +102,51 @@ for iter in range(1):   # num of testing runs
         if t == 0:
 
             cond[0] = observation
-            start = time.time()
-            # action, samples, diffusion_paths, safe1, safe2, elbo, trap1, trap2 = policy(cond, batch_size=args.batch_size)
-            action, samples, diffusion_paths, safe1, safe2, elbo = policy(cond, batch_size=args.batch_size)
-            # action, samples, diffusion_paths, elbo = policy(cond, batch_size=args.batch_size)
-            end = time.time()
-            comp_time.append(end-start)
+            start_time = time.time()
+            action, samples, diffusion_paths, safe1, safe2, elbo, trap1, trap2, iter_time = policy(cond, batch_size=args.batch_size)
+            end_time = time.time()
+            compute_time.append(end_time - start_time)
             elbo_batch.append(elbo)
+            safe1_val, safe2_val = safe1.item(), safe2.item()
             
-    #############################       single test
-            # cond[0] = observation
-            # action, samples, diffusion_paths, safe1, safe2 = policy(cond, batch_size=args.batch_size)  #policy.normalizer.normalizers['observations'].mins
             actions = samples.actions[0]
             sequence = samples.observations[0]
             diffusion_paths = diffusion_paths[0]
-
             
-            ##################################################save videos/images
-            fullpath = join(args.savepath, f'{iter}.png')
-            renderer.composite(fullpath, samples.observations, ncol=1)
-            #########################################s################# 8/3/2023
-            # diffusion_sm = smooth(diffusion_paths)    # smooth the generated traj.
-            diffusion_sm = diffusion_paths            # do not smooth the generated traj.
-            renderer.render_diffusion(join(args.savepath, f'diffusion.mp4'), diffusion_sm)
-
-            # makedirs(join(args.savepath, 'trap'))
-            # fullpath = join(args.savepath, f'trap/{iter}.png')
+            ##################################################start saving videos/images
+            # # Save the composite image of all trajectories
+            # fullpath = join(args.savepath, f'{iter}.png')
             # renderer.composite(fullpath, samples.observations, ncol=1)
 
-            diff_step = diffusion_sm.shape[0]  
-            makedirs(join(args.savepath, 'png'))
-            for kk in range(diff_step):
-                imgpath = join(args.savepath, f'png/{kk}.png')
-                renderer.composite(imgpath, diffusion_sm[kk:kk+1], ncol=1)
+            # # Save the diffusion process as a video
+            # # diffusion_sm = smooth(diffusion_paths)  # smooth the generated traj.
+            # diffusion_sm = diffusion_paths            # do not smooth the generated traj.
+            # renderer.render_diffusion(join(args.savepath, f'diffusion.mp4'), diffusion_sm)
+
+            # # Save individual frames of the diffusion process
+            # diff_step = diffusion_sm.shape[0]  
+            # makedirs(join(args.savepath, 'png'))
+            # for kk in range(diff_step):
+            #     imgpath = join(args.savepath, f'png/{kk}.png')
+            #     renderer.composite(imgpath, diffusion_sm[kk:kk+1], ncol=1)
             ##################################################end saving videos/images
 
-        #####
+        ##################################################start planning
         if t < len(sequence) - 1:
             next_waypoint = sequence[t+1]
         else:
             next_waypoint = sequence[-1].copy()
             next_waypoint[2:] = 0
             
-
-        ## can use actions or define a simple controller based on state predictions
+        # can use actions or define a simple controller based on state predictions
         action = next_waypoint[:2] - state[:2] + (next_waypoint[2:] - state[2:])
-        
-        # else:
-        #     actions = actions[1:]
-        #     if len(actions) > 1:
-        #         action = actions[0]
-        #     else:
-        #         # action = np.zeros(2)
-        #         action = -state[2:]
-        #         pdb.set_trace()
-
-
 
         next_observation, reward, terminal, _ = env.step(action)
         total_reward += reward
         score = env.get_normalized_score(total_reward)
+        ##################################################end planning
 
-        ###############################################################################################
+        ##################################################start logging
         # print(
         #     f't: {t} | r: {reward:.2f} |  R: {total_reward:.2f} | score: {score:.4f} | '
         #     f'{action}'
@@ -166,8 +163,9 @@ for iter in range(1):   # num of testing runs
         rollout.append(next_observation.copy())
 
         # logger.log(score=score, step=t)
+        ##################################################end logging
 
-        ###############################################################################################
+        ##################################################start saving videos/images
         # if t % args.vis_freq == 0 or terminal:
         #     fullpath = join(args.savepath, f'{t}.png')
 
@@ -182,30 +180,57 @@ for iter in range(1):   # num of testing runs
         #     # renderer.render_rollout(join(args.savepath, f'rollout.mp4'), rollout, fps=80)
 
         #     # logger.video(rollout=join(args.savepath, f'rollout.mp4'), plan=join(args.savepath, f'{t}_plan.mp4'), step=t)
+        ##################################################end saving videos/images
 
         if terminal:
             break
 
         observation = next_observation
-
+    
+    ##################################################start statistics calculation
     if reward > 0.95:
-        success = success + 1
+        num_success = num_success + 1
 
-    # score = 0
-    # if trap1 == True:
-    #     trap1_batch += 1
-    # if trap2 == True:
-    #     trap2_batch += 1
+    if trap1 == True:
+        num_trap1 += 1
+    if trap2 == True:
+        num_trap2 += 1
 
-    safe1_batch.append(torch.cat([torch.tensor([safe1]), torch.tensor([score])], dim = 0))
-    safe2_batch.append(torch.cat([torch.tensor([safe2]), torch.tensor([score])], dim = 0))
-    # safe1_batch.append(torch.cat([safe1[-1].unsqueeze(0).unsqueeze(0), torch.tensor(score).unsqueeze(0).unsqueeze(0).to(safe1.device)], dim = 1))
-    # safe2_batch.append(torch.cat([safe2[-1].unsqueeze(0).unsqueeze(0), torch.tensor(score).unsqueeze(0).unsqueeze(0).to(safe2.device)], dim = 1))
+    safe1_batch.append(safe1_val)
+    safe2_batch.append(safe2_val)
     score_batch.append(score)
+    iter_time_batch.append(iter_time)
+    ##################################################end statistics calculation
+
     # logger.finish(t, env.max_episode_steps, score=score, value=0)
-    print(safe1_batch)
-    print(safe2_batch)
-    print(score_batch)
+
+    ##################################################start per-iter statistics calculation
+    # per-iter statistics calculation
+    trap1_val    = int(trap1)
+    trap2_val    = int(trap2)
+    score_val    = float(score)
+    itertime_val = float(iter_time[0])
+    success_val  = 1 if reward > 0.95 else 0
+
+    # append mode to write one line to csv file
+    with open(csv_path, 'a', newline='') as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow([
+            iter,
+            safe1_val,
+            safe2_val,
+            trap1_val,
+            trap2_val,
+            score_val,
+            itertime_val,
+            success_val
+        ])
+    ##################################################end per-iter statistics calculation
+
+# --------------------------------- statistics calculation ----------------------------------#
+
+iter_time_batch = np.array(iter_time_batch)
+iter_time_avg = np.mean(iter_time_batch, axis=0)
 
 # pdb.set_trace()
 print("======================results======================")
@@ -214,54 +239,66 @@ print("elbo mean: ", np.mean(elbo_batch))
 print("elbo std: ", np.std(elbo_batch))
 
 score_batch = np.array(score_batch)
-safe1_batch = torch.stack(safe1_batch, dim=0)
-safe2_batch = torch.stack(safe2_batch, dim=0)
-comp_time = np.array(comp_time)
-print("safe1: ", torch.min(safe1_batch[:,0]).cpu().numpy())
-print("safe2: ", torch.min(safe2_batch[:,0]).cpu().numpy())
-# print("trap1: ", trap1_batch)
-# print("trap2: ", trap2_batch)
-print("score mean: ", np.mean(score_batch))
-print("score std: ", np.std(score_batch))
-print("computation time: ", np.mean(comp_time))
-print("success rate: ", success)
+compute_time = np.array(compute_time)
+print(f"safe1: {np.mean(safe1_batch):.4f} ± {np.std(safe1_batch):.4f}")
+print(f"safe2: {np.mean(safe2_batch):.4f} ± {np.std(safe2_batch):.4f}")
+print("trap1: ", num_trap1)
+print("trap2: ", num_trap2)
+print(f"score: {np.mean(score_batch):.5f} ± {np.std(score_batch):.5f}")
+print("computation time: ", np.mean(compute_time))
+print("avg iter time: ", iter_time_avg[0])
+print(f"number of success: {num_success} / {TOTAL_TEST_RUN}")
 print("=======================end=========================")
 
-# exit()
+# --------------------------------- plot ----------------------------------#
+try:
+    import matplotlib.pyplot as plt
+    
+    # Create figure and axes
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    
+    # Plot safe1 data
+    ax1.set_title('Safety Specification 1')
+    ax1.set_xlabel('Iteration')
+    ax1.set_ylabel('Safety Value')
+    ax1.plot(range(len(safe1_batch)), safe1_batch, 'b-', label='Safe1')
+    ax1.grid(True)
+    ax1.legend()
+    
+    # Plot safe2 data
+    ax2.set_title('Safety Specification 2')
+    ax2.set_xlabel('Iteration')
+    ax2.set_ylabel('Safety Value')
+    ax2.plot(range(len(safe2_batch)), safe2_batch, 'r-', label='Safe2')
+    ax2.grid(True)
+    ax2.legend()
+    
+    # Adjust layout and save
+    plt.tight_layout()
+    imgpath = join(args.savepath, 'safety_stats.png')
+    plt.savefig(imgpath, dpi=300, bbox_inches='tight')
+    plt.close('all')  # Properly close all figures
+    
+except Exception as e:
+    print(f"Warning: Could not create plots: {str(e)}")
 
-import matplotlib.pyplot as plt
-fig = plt.figure(figsize=(8, 4), facecolor='white')
-ax1 = fig.add_subplot(121, frameon=False)
-ax2 = fig.add_subplot(122, frameon=False)
-plt.show(block=False)
-
-ax1.cla()
-ax1.set_title('Trajectories')
-ax1.set_xlabel('score')
-ax1.set_ylabel('min. S-spec')
-# ax1.plot(safe1_batch.cpu().numpy()[:,1], safe1_batch.cpu().numpy()[:,0], 'r*', label = 'ground truth')
-
-ax2.cla()
-ax2.set_title('Trajectories')
-ax2.set_xlabel('score')
-ax2.set_ylabel('min. C-spec')
-# ax2.plot(safe2_batch.cpu().numpy()[:,1], safe2_batch.cpu().numpy()[:,0], 'r*', label = 'ground truth')
-
-imgpath = join(args.savepath, f'stat.png')
-
-plt.savefig(imgpath)
-
-# import pdb; pdb.set_trace()
-
-# exit()
-
-
-
-
-
-
-## save result as a json file
-json_path = join(args.savepath, 'rollout.json')
-json_data = {'score': score, 'step': t, 'return': total_reward, 'term': terminal,
-    'epoch_diffusion': diffusion_experiment.epoch}
-json.dump(json_data, open(json_path, 'w'), indent=2, sort_keys=True)
+# Save result as a json file
+try:
+    json_path = join(args.savepath, 'rollout.json')
+    json_data = {
+        'score': float(score),
+        'step': int(t),
+        'return': float(total_reward),
+        'term': bool(terminal),
+        'epoch_diffusion': int(diffusion_experiment.epoch),
+        'safety_stats': {
+            'safe1_mean': float(np.mean(safe1_batch)),
+            'safe2_mean': float(np.mean(safe2_batch)),
+            'safe1_std': float(np.std(safe1_batch)),
+            'safe2_std': float(np.std(safe2_batch))
+        }
+    }
+    with open(json_path, 'w') as f:
+        json.dump(json_data, f, indent=2, sort_keys=True)
+except Exception as e:
+    print(f"Warning: Could not save json file: {str(e)}")

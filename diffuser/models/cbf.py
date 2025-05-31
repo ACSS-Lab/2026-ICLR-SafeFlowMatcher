@@ -38,9 +38,6 @@ class CBF:
         dy = (x[:,2:3] - off_y) / self.yr
         order = obs['order']
 
-        # b(x)
-        b = dy**order + dx**order - 1 - self.robust_term
-
         # Lie derivative
         L1 = order * dy**(order-1) / self.yr
         L2 = order * dx**(order-1) / self.xr
@@ -49,6 +46,9 @@ class CBF:
         alpha = self.alpha
         rho = self.rho
         delta = self.robust_term
+
+        # construct b(x)
+        b = dy**order + dx**order - 1 - delta
 
         if self.cbf_method == 'robust':
             G = torch.cat([-L1, -L2], dim=1).unsqueeze(1)
@@ -112,7 +112,7 @@ class CBF:
 
         out = QPFunction(
             eps=1e-12,                       # Tolerance (convergence criterion)
-            verbose=0,                       # Output level (-1: off, 0: summary, 1: detailed)
+            verbose=-1,                      # Output level (-1: off, 0: summary, 1: detailed)
             notImprovedLim=10,                # Allowed number of iterations without improvement
             maxIter=20,                      # Maximum number of iterations
             solver=QPSolvers.PDIPM_BATCHED,  # Solver to use
