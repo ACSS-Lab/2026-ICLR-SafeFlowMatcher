@@ -229,7 +229,7 @@ class Trainer(object):
             )
 
             ## [ n_samples x horizon x (action_dim + observation_dim) ]
-            samples = self.ema_model.conditional_sample(conditions, return_diffusion = False)
+            samples = self.ema_model.conditional_sample(conditions, record_traj = False)
             samples = to_np(samples)
 
             ## [ n_samples x horizon x observation_dim ]

@@ -1152,14 +1152,14 @@ class GaussianDiffusion(nn.Module):
             return x
 
     @torch.no_grad()
-    def p_sample_loop(self, shape, cond, verbose=True, return_diffusion=False):
+    def p_sample_loop(self, shape, cond, verbose=True, record_traj=False):
         device = self.betas.device
 
         batch_size = shape[0]
         x = torch.randn(shape, device=device)
         x = apply_conditioning(x, cond, self.action_dim)
 
-        if return_diffusion: diffusion = [x]
+        if record_traj: diffusion = [x]
 
         progress = utils.Progress(self.n_timesteps) if verbose else utils.Silent()
         iter_time = 0
@@ -1172,19 +1172,19 @@ class GaussianDiffusion(nn.Module):
             x = apply_conditioning(x, cond, self.action_dim)
             progress.update({'t': i})
 
-            if return_diffusion: diffusion.append(x)
+            if record_traj: diffusion.append(x)
             iter_end = time.time()
             iter_time += (iter_end - iter_start)
 
         progress.close()
         # pdb.set_trace()
-        if return_diffusion:
+        if record_traj:
             return x, torch.stack(diffusion, dim=1), [iter_time/self.n_timesteps]
         else:
             return x
 
     @torch.no_grad()
-    def conditional_sample(self, cond, *args, horizon=None, return_diffusion = True, **kwargs):
+    def conditional_sample(self, cond, *args, horizon=None, record_traj = True, **kwargs):
         '''
             conditions : [ (time, state), ... ]
         '''
@@ -1193,7 +1193,7 @@ class GaussianDiffusion(nn.Module):
         horizon = horizon or self.horizon
         shape = (batch_size, horizon, self.transition_dim)
 
-        return self.p_sample_loop(shape, cond, return_diffusion= return_diffusion, *args, **kwargs)   ## debug
+        return self.p_sample_loop(shape, cond, record_traj= record_traj, *args, **kwargs)   ## debug
 
     #------------------------------------------ training ------------------------------------------#
 
