@@ -8,6 +8,7 @@ import gym
 import mujoco_py as mjc
 import warnings
 import pdb
+from tqdm import trange
 
 from .arrays import to_np
 from .video import save_video, save_videos
@@ -76,7 +77,8 @@ def plot2img(fig, remove_margins=True):
     canvas = FigureCanvasAgg(fig)
     canvas.draw()
     img_as_string, (width, height) = canvas.print_to_buffer()
-    return np.fromstring(img_as_string, dtype='uint8').reshape((height, width, 4))
+    #return np.fromstring(img_as_string, dtype='uint8').reshape((height, width, 4))
+    return np.frombuffer(img_as_string, dtype='uint8').reshape((height, width, 4))
 
 #-----------------------------------------------------------------------------#
 #---------------------------------- renderers --------------------------------#
@@ -395,9 +397,9 @@ class MazeRenderer:
         n_diffusion_steps, horizon, joined_dim = diffusion_path.shape
 
         frame = []
-        for t in range(n_diffusion_steps):
-            print(f'[ utils/renderer ] Diffusion: {t} / {n_diffusion_steps}')
-
+        for t in trange(n_diffusion_steps,
+                        desc="[utils/renderer] Diffusion",  # 왼쪽 라벨
+                        unit="step"):
             img = self.renders(diffusion_path[t])
             frame.append(img)
 

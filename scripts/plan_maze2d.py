@@ -22,7 +22,7 @@ class Parser(utils.Parser):
     method: str = 'cfm'
 
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 #---------------------------------- setup ----------------------------------#
 
@@ -70,8 +70,9 @@ is_trap1, is_trap2 = 0, 0
 num_trap1, num_trap2 = 0, 0
 num_success = 0
 iter_time_batch = []
+cbf_warn_batch = []
 
-TOTAL_TEST_ITER = 10
+TOTAL_TEST_ITER = 1
 for iter in range(1, TOTAL_TEST_ITER+1):   # num of testing runs
     print("Total test iteration: ", iter, f"/{TOTAL_TEST_ITER}")
 
@@ -102,31 +103,29 @@ for iter in range(1, TOTAL_TEST_ITER+1):   # num of testing runs
         if t == 0:
 
             cond[0] = observation
-            action, samples, diffusion_paths, safe1, safe2, elbo, num_trap, iter_time = policy(cond, batch_size=args.batch_size)
+            action, samples, diffusion_paths, safe1, safe2, elbo, num_trap, iter_time, cbf_warn = policy(cond, batch_size=args.batch_size)
             elbo_batch.append(elbo)
-            safe1_val, safe2_val = safe1.item(), safe2.item()
+            safe1_val, safe2_val = safe1, safe2
             
             actions = samples.actions[0]
             sequence = samples.observations[0]
             diffusion_paths = diffusion_paths[0]
             
             ##################################################start saving videos/images
-            # Save the composite image of all trajectories
-            fullpath = join(args.savepath, f'{iter}.png')
-            renderer.composite(fullpath, samples.observations, ncol=1)
+            # # Save the composite image of all trajectories
+            # fullpath = join(args.savepath, f'{iter}.png')
+            # renderer.composite(fullpath, samples.observations, ncol=1)
 
             # # Save the diffusion process as a video
-            # # diffusion_sm = smooth(diffusion_paths)  # smooth the generated traj.
-            # diffusion_sm = diffusion_paths            # do not smooth the generated traj.
-            # renderer.render_diffusion(join(args.savepath, f'diffusion.mp4'), diffusion_sm)
+            # renderer.render_diffusion(join(args.savepath, f'diffusion.mp4'), diffusion_paths)
 
             # # Save individual frames of the diffusion process
-            # diff_step = diffusion_sm.shape[0]  
+            # diff_step = diffusion_paths.shape[0]  
             # makedirs(join(args.savepath, 'png'))
             # for kk in range(diff_step):
             #     imgpath = join(args.savepath, f'png/{kk}.png')
-            #     renderer.composite(imgpath, diffusion_sm[kk:kk+1], ncol=1)
-            ##################################################end saving videos/images
+            #     renderer.composite(imgpath, diffusion_paths[kk:kk+1], ncol=1)
+            #################################################end saving videos/images
 
         ##################################################start planning
         if t < len(sequence) - 1:
@@ -204,6 +203,7 @@ for iter in range(1, TOTAL_TEST_ITER+1):   # num of testing runs
     safe2_batch.append(safe2_val)
     score_batch.append(score)
     iter_time_batch.append(iter_time)
+    cbf_warn_batch.append(cbf_warn)
     ##################################################end statistics calculation
 
     # logger.finish(t, env.max_episode_steps, score=score, value=0)
@@ -241,12 +241,13 @@ print("elbo mean: ", np.mean(elbo_batch))
 print("elbo std: ", np.std(elbo_batch))
 
 score_batch = np.array(score_batch)
-print(f"safe1: {np.mean(safe1_batch):.4f} ± {np.std(safe1_batch):.4f}")
-print(f"safe2: {np.mean(safe2_batch):.4f} ± {np.std(safe2_batch):.4f}")
+print(f"safe1: min: {np.min(safe1_batch):.4f}/ {np.mean(safe1_batch):.4f} ± {np.std(safe1_batch):.4f}")
+print(f"safe2: min: {np.min(safe2_batch):.4f}/ {np.mean(safe2_batch):.4f} ± {np.std(safe2_batch):.4f}")
 print(f"trap1: {num_trap1} / {TOTAL_TEST_ITER}")
 print(f"trap2: {num_trap2} / {TOTAL_TEST_ITER}")
 print(f"score: {np.mean(score_batch):.5f} ± {np.std(score_batch):.5f}")
-print("avg iter time: ", iter_time_avg[0])
+print(f"avg iter time: {iter_time_avg[0]}")
+print(f"avg cbf warn: {np.mean(cbf_warn_batch):.1f}/384 ± {np.std(cbf_warn_batch):.1f}/384")
 print(f"number of success: {num_success} / {TOTAL_TEST_ITER}")
 print("=======================end=========================")
 

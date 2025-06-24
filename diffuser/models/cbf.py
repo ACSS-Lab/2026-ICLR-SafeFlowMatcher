@@ -59,7 +59,6 @@ class CBF:
 
         elif self.cbf_method == 'relax':
             # sign = 30.0 if (t is not None and t <= self.relax_threshold) else 0.0
-
             if t <= self.relax_threshold:
                 ratio = t / self.relax_threshold
                 sign = 200.0 * (1 - math.exp(3 * (ratio - 1)))  # exp drop near t=relax_threshold
@@ -304,6 +303,34 @@ class CBF:
             sub_goal_list.append(sub_goal)
 
         return t_list, sub_goal_list
+
+    @torch.no_grad()
+    def cbf_nv(self, x1):
+        num = 0
+        safe_l = []
+
+        x1_pos_y = x1[:, :, self.action_dim]
+        x1_pos_x = x1[:, :, self.action_dim + 1]
+
+        for obs in self.obstacles:
+            center = obs['center']
+            n = obs['order']
+
+            # 1. Calculate the center
+            off_y = 2*(center[1]-0.5 - self.norm_mins[0]) / (self.norm_maxs[0] - self.norm_mins[0]) - 1
+            off_x = 2*(center[0]-0.5 - self.norm_mins[1]) / (self.norm_maxs[1] - self.norm_mins[1]) - 1
+
+
+            # 5. Calculate the CBF value
+            cbf_value = ((x1_pos_y - off_y)/self.yr)**n + ((x1_pos_x - off_x)/self.xr)**n - 1 
+
+            cbf_value = cbf_value.tolist()[0]
+            # 6. Calculate num of under 0
+            num += sum(1 for v in cbf_value if v <= (self.robust_term + 1e-4)) # margin + error = greedy pos
+            
+            safe_l.append(min(cbf_value))
+
+        return safe_l, num
     
 # =========== under is func for visualization ============
 def visualize_cbf_violation(x0, x0_prime, x1, cbf_vi, t_idx, action_dim, name):

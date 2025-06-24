@@ -57,36 +57,36 @@ class Policy:
         ## run reverse diffusion process
         self.diffusion_model.norm_mins = self.normalizer.normalizers['observations'].mins
         self.diffusion_model.norm_maxs = self.normalizer.normalizers['observations'].maxs
-        sample, diffusion, iter_time = self.diffusion_model(conditions)
+        sample, diffusion, iter_time, safe_l, cbf_warn = self.diffusion_model(conditions)
 
         ########################################################## calculate number of traps
         num_trap = utils.local_trap(diffusion, self.diffusion_model.cbf, batch_idx=0, n_timesteps=255)
 
         #if get elbo/NLL (diffuser) ####################################################for elbo/NLL
-        x_0 = diffusion[:,-1,:,:]
-        diff_num = diffusion.shape[1]
-        elbo = []
-        sum_elbo = 0
-        x_T = torch.randn_like(x_0, device=self.device)
+        # x_0 = diffusion[:,-1,:,:]
+        # diff_num = diffusion.shape[1]
+        # elbo = []
+        # sum_elbo = 0
+        # x_T = torch.randn_like(x_0, device=self.device)
         
-        prior_bpd = self.diffusion_model._prior_bpd(x_T, diff_num-1) # L_T
-        sum_elbo = sum_elbo + prior_bpd
-        elbo.append(prior_bpd)
-        for step in range(0, diff_num-1, 1): # L_t-1 ~ L_1
-            timesteps = torch.full((batch_size,), diff_num-2 - step, device=self.device, dtype=torch.long)
-            x_t = self.diffusion_model.q_sample(x_0, timesteps, x_T)
-            elboi = self.diffusion_model._vb_terms_bpd(x_0, conditions, x_t, timesteps)
-            sum_elbo = sum_elbo + elboi
-            elbo.append(elboi)
+        # prior_bpd = self.diffusion_model._prior_bpd(x_T, diff_num-1) # L_T
+        # sum_elbo = sum_elbo + prior_bpd
+        # elbo.append(prior_bpd)
+        # for step in range(0, diff_num-1, 1): # L_t-1 ~ L_1
+        #     timesteps = torch.full((batch_size,), diff_num-2 - step, device=self.device, dtype=torch.long)
+        #     x_t = self.diffusion_model.q_sample(x_0, timesteps, x_T)
+        #     elboi = self.diffusion_model._vb_terms_bpd(x_0, conditions, x_t, timesteps)
+        #     sum_elbo = sum_elbo + elboi
+        #     elbo.append(elboi)
 
+        #     print(f"ELBO-{step}: {elboi}")
 
-
-        sum_elbo = sum_elbo.detach().cpu().numpy()[0]#/(diff_num) 생각해보니까 나누기왜함?
+        # sum_elbo = sum_elbo.detach().cpu().numpy()[0]
         #elif get NLL (flow matcher)#####################################################################
-        # _, nll = self.diffusion_model.compute_nll(sample, num_steps=200, exact_div=False)
+        # _, nll = self.diffusion_model.compute_nll(sample, num_steps=256, exact_div=False)
         # sum_elbo = nll.item()
         # else ##########################################################################################
-        # sum_elbo = 0
+        sum_elbo = 0
         # end#########################################################################
 
         sample = utils.to_np(sample)
@@ -108,4 +108,5 @@ class Policy:
         diffusions = self.normalizer.unnormalize(normed_diffusion, 'observations')
 
         trajectories = Trajectories(actions, observations)
-        return action, trajectories, diffusions, self.diffusion_model.safe1, self.diffusion_model.safe2, sum_elbo, num_trap, iter_time
+        #return action, trajectories, diffusions, self.diffusion_model.safe1, self.diffusion_model.safe2, sum_elbo, num_trap, iter_time, cbf_warn
+        return action, trajectories, diffusions, safe_l[0], safe_l[1], sum_elbo, num_trap, iter_time, cbf_warn

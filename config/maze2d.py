@@ -204,7 +204,7 @@ maze2d_large_v1 = {
         # (If you want to use naive FM, you also need to change conditional_sample in cfm.py)
 
         # One Shot Initialization
-        'one_shot_enabled': False,  # True, False
+        'one_shot_enabled': True,  # True, False
 
         ## CBF for flow matching
         'obstacles': [
@@ -214,7 +214,7 @@ maze2d_large_v1 = {
         'cbf_solver': 'closed_form',   # 'qp', 'closed_form'
         'cbf_method': 'relax', # 'robust', 'relax', 'time'
         'robust_term': 0.01,  # 0.01, 0.1
-        'relax_threshold': 0.9999,
+        'relax_threshold': 0.99, # 0.9999
 
         # set suffix
         'suffix': 'test'
