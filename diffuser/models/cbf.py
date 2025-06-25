@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from qpth.qp import QPFunction, QPSolvers
+import pdb
 
 class CBF:
     def __init__(self, norm_mins, norm_maxs, args):
@@ -189,6 +190,74 @@ class CBF:
         return out
 
     @torch.no_grad()
+    def vel_d(self, x1):
+
+        x1_pos_y = x1[:, self.action_dim]
+        x1_pos_x = x1[:, self.action_dim + 1]
+
+        for obs in self.obstacles:
+            center = obs['center']
+            n = obs['order']
+
+            # 1. Calculate the center
+            off_y = 2*(center[1]-0.5 - self.norm_mins[0]) / (self.norm_maxs[0] - self.norm_mins[0]) - 1
+            off_x = 2*(center[0]-0.5 - self.norm_mins[1]) / (self.norm_maxs[1] - self.norm_mins[1]) - 1
+            pos_y = torch.full((1, self.horizon), off_y, device=self.device)
+            pos_x = torch.full((1, self.horizon), off_x, device=self.device)
+
+            # 2. Calculate the vector pointing from the obstacle center to the trajectory
+            v_y = x1_pos_y - pos_y
+            v_x = x1_pos_x - pos_x
+            v = x1.clone()
+            v_out = x1.clone()
+            v[:, self.action_dim] = v_y
+            v[:, self.action_dim + 1] = v_x
+
+            # 3. Calculate the boundary distance r0
+            denominator = ((v_y/self.yr)**n + (v_x/self.xr)**n)**(1/n)
+            r0 = (1 + 1e-2)**(1/n) / denominator
+
+            # 4. Generate x0' (push away from the obstacle center by a safe distance)
+            x0_prime = x1.clone()
+            x0_prime[:, self.action_dim] = pos_y
+            x0_prime[:, self.action_dim + 1] = pos_x
+            # pdb.set_trace()
+            x0_prime[:, self.action_dim:self.action_dim+2] += \
+            r0.squeeze().unsqueeze(-1) * v[:, self.action_dim:self.action_dim+2]
+
+            # 5. Calculate the CBF value
+            cbf_value = ((x1_pos_y - off_y)/self.yr)**n + ((x1_pos_x - off_x)/self.xr)**n - 1
+
+            orig_v = x1[:, 2*self.action_dim:]
+            #   ∇h = [∂h/∂y, ∂h/∂x]  (super-ellipse)  ─ 전체 시점 계산
+            grad_y =  (1/self.xr)**n * (x0_prime[:, self.action_dim+1] - off_x)**(n-1)
+            grad_x = -(1/self.yr)**n * (x0_prime[:, self.action_dim  ] - off_y)**(n-1)
+            p       = torch.stack([grad_y, grad_x], dim=-1)           # (1,T,2)
+            #   정규화해서 단위 법선 p̂(t)
+            p_norm  = torch.clamp(torch.norm(p, dim=-1, keepdim=True), min=1e-8)
+            p_unit  = p / p_norm                                      # (1,T,2)
+
+            # 2) 크기 =  | v·p̂ |   (속도를 p 위로 projection 한 스칼라 크기)
+            proj_mag = torch.abs( (orig_v * p_unit).sum(dim=-1, keepdim=True) )   # (1,T,1)
+
+            # 3) 부호 =  Δx(t)·p̂(t)  의 부호
+            pos      = x1[:, self.action_dim:2*self.action_dim]                # (1,T,2)
+            delta    = torch.diff(pos, dim=0, prepend=pos[:1])                 # (1,T,2)
+            sign     = torch.where( (delta * p_unit).sum(dim=-1, keepdim=True) < 0,
+                                    torch.tensor(-1., device=self.device),
+                                    torch.tensor( 1., device=self.device) )        # (1,T,1)
+
+            # 4) 새 속도 대입  v' = sign * proj_mag * p̂
+            x0_prime[:, 2*self.action_dim:] = sign * proj_mag * p_unit
+            violation_indices = torch.where(cbf_value < self.robust_term + 1e-3)[0]
+            #pdb.set_trace()
+            # 8. concat
+            for i in violation_indices:
+                v_out[i, 2*self.action_dim:] = x0_prime[i, 2*self.action_dim:]
+            
+        return v_out
+    
+    @torch.no_grad()
     def apply(self, x, xp1, t=None):
         # remove the leading batch‐of‐1 dim
         x   = x.squeeze(0)    # [B, state_dim]
@@ -222,6 +291,10 @@ class CBF:
         # rebuild the next‐state
         rt = xp1.clone()
         rt[:,2:4] = x[:,2:4] + out[:, :2]
+        # velocity delta
+        vel_delta = self.vel_d(x)
+        rt[:, 4:] = vel_delta[:, 4:]
+        # velocity delta
         return rt.unsqueeze(0), safe_vals
     
     @torch.no_grad()
@@ -326,7 +399,7 @@ class CBF:
 
             cbf_value = cbf_value.tolist()[0]
             # 6. Calculate num of under 0
-            num += sum(1 for v in cbf_value if v <= (self.robust_term + 1e-4)) # margin + error = greedy pos
+            num += sum(1 for v in cbf_value if v <= (self.robust_term + 1e-3)) # margin + error = greedy pos
             
             safe_l.append(min(cbf_value))
 

@@ -72,7 +72,7 @@ num_success = 0
 iter_time_batch = []
 cbf_warn_batch = []
 
-TOTAL_TEST_ITER = 1
+TOTAL_TEST_ITER = 10
 for iter in range(1, TOTAL_TEST_ITER+1):   # num of testing runs
     print("Total test iteration: ", iter, f"/{TOTAL_TEST_ITER}")
 
@@ -112,13 +112,13 @@ for iter in range(1, TOTAL_TEST_ITER+1):   # num of testing runs
             diffusion_paths = diffusion_paths[0]
             
             ##################################################start saving videos/images
-            # # Save the composite image of all trajectories
-            # fullpath = join(args.savepath, f'{iter}.png')
-            # renderer.composite(fullpath, samples.observations, ncol=1)
+            # Save the composite image of all trajectories
+            fullpath = join(args.savepath, f'{iter}.png')
+            renderer.composite(fullpath, samples.observations, ncol=1)
 
-            # # Save the diffusion process as a video
-            # renderer.render_diffusion(join(args.savepath, f'diffusion.mp4'), diffusion_paths)
-
+            # Save the diffusion process as a video
+            if num_trap >= 1:
+                renderer.render_diffusion(join(args.savepath, f'diffusion_{iter}.mp4'), diffusion_paths)
             # # Save individual frames of the diffusion process
             # diff_step = diffusion_paths.shape[0]  
             # makedirs(join(args.savepath, 'png'))
@@ -157,6 +157,7 @@ for iter in range(1, TOTAL_TEST_ITER+1):   # num of testing runs
 
         ## update rollout observations
         rollout.append(next_observation.copy())
+        #print(len(rollout), rollout[0].shape, [rollout[0]])
 
         # logger.log(score=score, step=t)
         ##################################################end logging
@@ -182,6 +183,12 @@ for iter in range(1, TOTAL_TEST_ITER+1):   # num of testing runs
             break
 
         observation = next_observation
+    
+    ######################
+    arr = np.expand_dims(np.stack(rollout), axis=0)
+    fullpath = join(args.savepath, f'rollout_{iter}.png')
+    renderer.composite(fullpath, arr, ncol=1)
+    
     
     ##################################################start statistics calculation
     if reward > 0.95:
@@ -247,7 +254,7 @@ print(f"trap1: {num_trap1} / {TOTAL_TEST_ITER}")
 print(f"trap2: {num_trap2} / {TOTAL_TEST_ITER}")
 print(f"score: {np.mean(score_batch):.5f} ± {np.std(score_batch):.5f}")
 print(f"avg iter time: {iter_time_avg[0]}")
-print(f"avg cbf warn: {np.mean(cbf_warn_batch):.1f}/384 ± {np.std(cbf_warn_batch):.1f}/384")
+print(f"avg cbf warn: {np.mean(cbf_warn_batch):.1f}/384 ± {np.std(cbf_warn_batch):.1f}")
 print(f"number of success: {num_success} / {TOTAL_TEST_ITER}")
 print("=======================end=========================")
 

@@ -216,9 +216,11 @@ class CFM(nn.Module):
             x1_pred = x0_1st_phase + v0
             
             x0_2nd_phase = x1_pred
+            vs = True  
         # ================ Multi-step Planning ================
         else:
             x0_2nd_phase = torch.randn(shape).to(self.device)
+            vs = False
         OSI_end = time.time()
         OSI_time = OSI_end - OSI_start
 
@@ -240,7 +242,6 @@ class CFM(nn.Module):
             # print(f"{i}-th iter / {T} (time: {t_act1 - t_start:.2f}s)", end="\r")
             t_now = time_list[i-1]
             # define dt based on scheduling
-            vs = True
             if vs:
                 lmbd = 1.0  # bigger give more power to previous step (0,1)
                 dt = ((2*lmbd)/(n_timesteps *(n_timesteps + 1))) * (n_timesteps-(i-1))+ (1-lmbd)/(n_timesteps)
@@ -256,10 +257,8 @@ class CFM(nn.Module):
             # CBF correction
             if self.safety_enabled and self.cbf is not None:
                 x_next_naive = x_now + u_raw * dt
-                x_corr, safe_val = self.cbf.apply(x_now, x_next_naive, t=t_now)
+                x_corr, _ = self.cbf.apply(x_now, x_next_naive, t=t_now)
                 dx = x_corr - x_now
-                self.safe1 = safe_val[0]
-                self.safe2 = safe_val[1]
             else:
                 dx = u_raw * dt
 
@@ -327,7 +326,8 @@ class CFM(nn.Module):
         return loss, info
 
     # wthout segementing
-    def forward23(self, cond, *args, **kwargs): 
+    def forward(self, cond, *args, **kwargs): 
+
         x1, traj, iter_per_time =  self.conditional_sample(cond=cond, *args, **kwargs)
 
         safe_l, cbf_warn = self.cbf.cbf_nv(x1)
@@ -517,7 +517,7 @@ class CFM(nn.Module):
     # ==================== with segmenting ==================== #
     # ==================== with segmenting ==================== #
 
-    def forward(self, cond, *args, **kwargs):
+    def forward23(self, cond, *args, **kwargs):
         batch_size = len(cond[0])
         horizon = self.horizon
         shape = (batch_size, horizon, self.transition_dim)
