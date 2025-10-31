@@ -247,7 +247,7 @@ class GaussianDiffusion(nn.Module):
         return xp1
     
     @torch.no_grad()
-    def GD(self, x0, xp10):
+    def GD(self, x0, xp10, eps=0.1):
         """
         Classifier guidance or potential-based method.
         """
@@ -278,12 +278,12 @@ class GaussianDiffusion(nn.Module):
         b2 = ((xp1[:,2:3] - off_y)/yr)**4 + ((xp1[:,3:4] - off_x)/xr)**4 - 1
 
         for k in range(nBatch):
-            if b[k, 0] < 0.1:  # 0, 0.2
+            if b[k, 0] < eps:  # 0, 0.2
                 u1 = 0.2/(2*((xp1[k,2:3] - off_y)/yr)/yr)
                 u2 = 0.2/(2*((xp1[k,3:4] - off_x)/xr)/xr)
                 xp1[k,2] = xp1[k,2] + u1*0.001  # note no 0.1/0.01 for GD, but has for potential
                 xp1[k,3] = xp1[k,3] + u2*0.001
-            elif b2[k, 0] < 0.1:  # 0, 0.2
+            elif b2[k, 0] < eps:  # 0, 0.2
                 u1 = 0.2/(4*((xp1[k,2:3] - off_y)/yr)**3/yr)
                 u2 = 0.2/(4*((xp1[k,3:4] - off_x)/xr)**3/xr)
                 xp1[k,2] = xp1[k,2] + u1*0.001
@@ -783,7 +783,7 @@ class GaussianDiffusion(nn.Module):
         off_y = 2*(5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
 
         # CBF
-        b2 = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - 1 - 0.6 #0.01
+        b2 = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - 1 - 0.01 #0.01
         Lfb = 0
         Lgbu12 = 4*((x[:,2:3] - off_y)/yr)**3/yr
         Lgbu22 = 4*((x[:,3:4] - off_x)/xr)**3/xr
@@ -1039,7 +1039,7 @@ class GaussianDiffusion(nn.Module):
             if self.predict_epsilon, model output is (scaled) noise;
             otherwise, model predicts x0 directly
         '''
-        if self.predict_epsilon:
+        if self.predict_epsilon:  # it is false
             return (
                 extract(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t -
                 extract(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape) * noise
@@ -1083,23 +1083,6 @@ class GaussianDiffusion(nn.Module):
         if not self.safety_enabled:
             ###################### original diffuser only
             x = xp1
-
-            # obstacle 1: ((x - c)/r)² - 1 < 0
-            xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
-            yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
-            off_x = 2*(5.8-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-            off_y = 2*(5-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-            b = ((x[:,2:3] - off_y)/yr)**2 + ((x[:,3:4] - off_x)/xr)**2 - 1
-            self.safe1 = torch.min(b[:,0])
-            
-            # obstacle 2: ((x - c)/r)^4 - 1 < 0
-            xr = 2*1/(self.norm_maxs[1] - self.norm_mins[1])
-            yr = 2*1/(self.norm_maxs[0] - self.norm_mins[0])
-            off_x = 2*(5.3-0.5 - self.norm_mins[1])/(self.norm_maxs[1] - self.norm_mins[1]) - 1
-            off_y = 2*(2-0.5 - self.norm_mins[0])/(self.norm_maxs[0] - self.norm_mins[0]) - 1
-            b = ((x[:,2:3] - off_y)/yr)**4 + ((x[:,3:4] - off_x)/xr)**4 - 1
-            self.safe2 = torch.min(b[:,0])
-            
             return x
         elif self.safety_enabled and self.cbf is not None:
             # Note:  choose any one of the below
@@ -1112,13 +1095,13 @@ class GaussianDiffusion(nn.Module):
 
             ####################### truncate (shield) and GD (classifier-guidance/potential-based)
             # x = self.Shield(x, xp1)
-            # x = self.GD(x, xp1)
+            # x = self.GD(x, xp1, eps=0) #eps=0.1 for GD-eps/ eps=0 for GD
 
             ####################### SafeDiffusers 
-            x = self.invariance(x, xp1)    # RoS
-            # x = self.invariance_cf(x, xp1)  # RoS closed form
+            # x = self.invariance(x, xp1)    # RoS
+            #  x = self.invariance_cf(x, xp1)  # RoS closed form
             # x = self.invariance_relax(x, xp1, t) # ReS
-            # x = self.invariance_relax_cf(x, xp1, t)   #ReS closed form    
+            x = self.invariance_relax_cf(x, xp1, t)   #ReS closed form    
             # x = self.invariance_time(x, xp1, t)   # TVS
             # x = self.invariance_time_cf(x, xp1, t)  # TVS closed form
             # x = self.invariance_relax_narrow(x, xp1, t)  # narrow passage case
@@ -1313,6 +1296,82 @@ class GaussianDiffusion(nn.Module):
         )
         return mean_flat(kl_prior) / np.log(2.0)
 
-    def forward(self, cond, *args, **kwargs):
+    def forward(self, cond, n_diffusion_steps, *args, **kwargs):
+        self.n_timesteps = int(n_diffusion_steps) # sphagetti code but quick fix
         return self.conditional_sample(cond=cond, *args, **kwargs)
+    
+    @torch.no_grad()
+    def _ddpm_jump(self, x_t, cond, t, s, eta=0): # for ddim extension
+        """
+        Jump from t -> s (s < t) using DDPM-ancestral noise.
+        if eta=1.0, same variation with DDPM, for 0, deterministic
+        """
+        x0 = self.model(x_t, cond, t)
+
+        a_t  = extract(self.alphas_cumprod, t, x_t.shape)
+        a_s  = extract(self.alphas_cumprod, s, x_t.shape)
+        sa_t = extract(self.sqrt_alphas_cumprod, t, x_t.shape)
+        sa_s = extract(self.sqrt_alphas_cumprod, s, x_t.shape)
+        sb_t = extract(self.sqrt_one_minus_alphas_cumprod, t, x_t.shape)
+        soa_t= extract(self.sqrt_one_minus_alphas_cumprod, t, x_t.shape)
+        # sa_t, sb_t = self._alpha_schedule(self.alphas_cumprod, t, x_t.shape)
+
+        # \hat{x}_0
+        x0_hat = x0
+        eps = (x_t - sa_t * x0_hat) / sb_t
+        if self.clip_denoised:
+            x0_hat = x0_hat.clamp(-1., 1.)
+
+        one_ms = 1.0 - a_s
+        one_mt = 1.0 - a_t
+
+        # sa_s, sb_s = self._alpha_schedule(self.alphas_cumprod, s, x_t.shape)
+        # alpha_bar_s = sa_s**2
+        # alpha_bar_t = sa_t**2
+        
+        # DDIM's sigma; if eta=1, DDPM-ancestral deviation
+        # sigma = eta * torch.sqrt((one_ms / one_mt) * (1.0 - a_t / a_s))
+        sigma_squared = (eta**2) * ((1 - a_s) / (1 - a_t)) * (1 - a_t / a_s)
+        sigma = torch.sqrt(torch.clamp(sigma_squared, min=1e-8)) # 1e-8 for numerical stability
+        
+        dir_c = torch.sqrt(torch.clamp(1.0 - a_s - sigma**2, min=1e-8))
+
+        z = torch.randn_like(x_t)
+        
+        nonzero = (s != 0).float().reshape(x_t.shape[0], *((1,) * (len(x_t.shape) - 1)))
+        
+        x_s = sa_s * x0_hat + dir_c * eps + nonzero * sigma * z
+
+        # safe module hook
+        xp1 = x_s
+        if not self.safety_enabled:
+            return xp1
+        elif self.safety_enabled and self.cbf is not None:
+            # choose cbf method
+            if self.cbf.cbf_method == 'robust':
+                return self.invariance_cf(x_t, xp1)
+            elif self.cbf.cbf_method == 'relax':
+                return self.invariance_relax_cf(x_t, xp1, t)
+            elif self.cbf.cbf_method == 'time':
+                return self.invariance_time_cf(x_t, xp1, t)
+            else: 
+                return xp1
+        
+    def _make_timestep_schedule(self, nfe, device):
+        """
+        Descending indices [t0, t1, ..., 0] of length nfe,
+        t0 = self.n_timesteps-1, 마지막은 0.
+        """
+        # for nfe value bug catch
+        if nfe is None or nfe >= self.n_timesteps:
+            return torch.arange(256-1, -1, -1, device=device, dtype=torch.long)
+
+        idx = torch.linspace(0, 256-1, steps=nfe, device=device)
+        idx = torch.round(idx).to(torch.long)
+        idx = torch.unique_consecutive(idx)
+        if idx[-1] != 256-1: idx[-1] = 256-1
+        if idx[0]  != 0:                   idx[0]  = 0
+        return torch.flip(idx, dims=[0])  # reverse order
+
+
 

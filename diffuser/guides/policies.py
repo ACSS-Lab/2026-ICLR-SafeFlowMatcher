@@ -27,6 +27,8 @@ class Policy:
 
         self.diffusion_model.safety_enabled = args.safety_enabled
         self.diffusion_model.cbf = CBF(norm_mins, norm_maxs, args)
+        self.n_diffusion_steps = args.n_diffusion_steps
+        self.cbf_method = args.cbf_method
 
     @property
     def device(self):
@@ -57,10 +59,12 @@ class Policy:
         ## run reverse diffusion process
         self.diffusion_model.norm_mins = self.normalizer.normalizers['observations'].mins
         self.diffusion_model.norm_maxs = self.normalizer.normalizers['observations'].maxs
-        sample, diffusion, iter_time, safe_l, cbf_warn = self.diffusion_model(conditions)
+        sample, diffusion, iter_time = self.diffusion_model(conditions, self.n_diffusion_steps)
+        safe_l = self.diffusion_model.cbf.cbf_nv(sample)
+        c_smooth, s_smooth = self.diffusion_model.cbf.calc_smooth(sample)
 
         ########################################################## calculate number of traps
-        num_trap = utils.local_trap(diffusion, self.diffusion_model.cbf, batch_idx=0, n_timesteps=255)
+        num_trap = utils.local_trap(diffusion, self.diffusion_model.cbf, batch_idx=0, n_timesteps=self.n_diffusion_steps-1)
 
         #if get elbo/NLL (diffuser) ####################################################for elbo/NLL
         # x_0 = diffusion[:,-1,:,:]
@@ -109,4 +113,4 @@ class Policy:
 
         trajectories = Trajectories(actions, observations)
         #return action, trajectories, diffusions, self.diffusion_model.safe1, self.diffusion_model.safe2, sum_elbo, num_trap, iter_time, cbf_warn
-        return action, trajectories, diffusions, safe_l[0], safe_l[1], sum_elbo, num_trap, iter_time, cbf_warn
+        return action, trajectories, diffusions, safe_l[0], safe_l[1], sum_elbo, num_trap, iter_time, c_smooth, s_smooth

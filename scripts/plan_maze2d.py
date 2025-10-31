@@ -1,6 +1,6 @@
 import json
 import numpy as np
-from os.path import join
+from os.path import join, dirname
 import pdb
 import csv
 import time
@@ -10,6 +10,17 @@ from diffuser.guides.policies import Policy
 import diffuser.datasets as datasets
 import diffuser.utils as utils
 import torch
+
+# fix seed
+# import random
+# seed = 42
+# random.seed(seed)
+# np.random.seed(seed)
+# torch.manual_seed(seed)
+# if torch.cuda.is_available():
+#     torch.cuda.manual_seed(seed)
+#     torch.cuda.manual_seed_all(seed)
+# fix seed
 
 # diffusion model:
 # python scripts/plan_maze2d.py --config config.maze2d --dataset maze2d-large-v1 --logbase logs --method base
@@ -68,11 +79,11 @@ score_batch = []
 elbo_batch = []
 is_trap1, is_trap2 = 0, 0
 num_trap1, num_trap2 = 0, 0
+c_smooth_batch, s_smooth_batch = [], []
 num_success = 0
 iter_time_batch = []
-cbf_warn_batch = []
 
-TOTAL_TEST_ITER = 10
+TOTAL_TEST_ITER = 1
 for iter in range(1, TOTAL_TEST_ITER+1):   # num of testing runs
     print("Total test iteration: ", iter, f"/{TOTAL_TEST_ITER}")
 
@@ -94,7 +105,9 @@ for iter in range(1, TOTAL_TEST_ITER+1):   # num of testing runs
     rollout = [observation.copy()]
 
     total_reward = 0
-    for t in range(env.max_episode_steps):
+    env_step = env.max_episode_steps
+    # env_step = 384 #env.max_episode_steps # real need is 384 because the plan horizon is only 384
+    for t in range(env_step):
 
         state = env.state_vector().copy()
 
@@ -103,7 +116,7 @@ for iter in range(1, TOTAL_TEST_ITER+1):   # num of testing runs
         if t == 0:
 
             cond[0] = observation
-            action, samples, diffusion_paths, safe1, safe2, elbo, num_trap, iter_time, cbf_warn = policy(cond, batch_size=args.batch_size)
+            action, samples, diffusion_paths, safe1, safe2, elbo, num_trap, iter_time, c_smooth, s_smooth = policy(cond, batch_size=args.batch_size)
             elbo_batch.append(elbo)
             safe1_val, safe2_val = safe1, safe2
             
@@ -113,18 +126,38 @@ for iter in range(1, TOTAL_TEST_ITER+1):   # num of testing runs
             
             ##################################################start saving videos/images
             # Save the composite image of all trajectories
-            fullpath = join(args.savepath, f'{iter}.png')
-            renderer.composite(fullpath, samples.observations, ncol=1)
+            if True: # if you want to save result trajectories
+                fullpath = join(args.savepath, f'results/{iter}.png')
+                os.makedirs(dirname(fullpath), exist_ok=True)
+                renderer.composite(fullpath, samples.observations, ncol=1)
+                
+                # Save the next step composite image of all trajectoiries
+                """
+                for checking velocity of each way-points, 
+                """
+                # fullpath = join(args.savepath, f'{iter}_next.png')
+                # next_time_observation = samples.observations.copy()
+                # for i in range(next_time_observation.shape[1]-1):
+                #     next_time_observation[:, i, :2] += samples.observations[:, i+1, 2:4] * 1e-2   # next pos = curr pos + next vel * 1e-2(time interval)
+                # renderer.composite(fullpath, next_time_observation, ncol=1)
 
             # Save the diffusion process as a video
-            if num_trap >= 1:
+            if False: # if you want to save diffusion process video
                 renderer.render_diffusion(join(args.savepath, f'diffusion_{iter}.mp4'), diffusion_paths)
-            # # Save individual frames of the diffusion process
+            
+            # Save individual frames of the diffusion process
             # diff_step = diffusion_paths.shape[0]  
             # makedirs(join(args.savepath, 'png'))
             # for kk in range(diff_step):
             #     imgpath = join(args.savepath, f'png/{kk}.png')
             #     renderer.composite(imgpath, diffusion_paths[kk:kk+1], ncol=1)
+            
+            # Save individual state's movement of the diffusion process
+            # diff_step = diffusion_paths.shape[0]  
+            # makedirs(join(args.savepath, 'state'))
+            # for k in range(258):
+            #     imgpath = join(args.savepath, f'state/{k}.png')
+            #     renderer.composite_state(imgpath, diffusion_paths[:,k], ncol=1)
             #################################################end saving videos/images
 
         ##################################################start planning
@@ -136,6 +169,15 @@ for iter in range(1, TOTAL_TEST_ITER+1):   # num of testing runs
             
         # can use actions or define a simple controller based on state predictions
         action = next_waypoint[:2] - state[:2] + (next_waypoint[2:] - state[2:])
+        if t==0:
+            prev_action = action.copy()
+            prev_state = state.copy()
+        # if t < 400:
+        #     print(f"t: {t} | action: {action} | next_waypoint: {next_waypoint} | state: {state}")
+        #     print(f"v dt: {(state[2] - prev_state[2]) / prev_action[0]} / {(state[3] - prev_state[3]) /prev_action[1]}")
+        #     print(f"x dt: {(state[0] - prev_state[0]) / state[2]} / {(state[1] - prev_state[1]) / state[3]}")
+        prev_action = action.copy()
+        prev_state = state.copy()
 
         next_observation, reward, terminal, _ = env.step(action)
         total_reward += reward
@@ -186,8 +228,9 @@ for iter in range(1, TOTAL_TEST_ITER+1):   # num of testing runs
     
     ######################
     arr = np.expand_dims(np.stack(rollout), axis=0)
-    fullpath = join(args.savepath, f'rollout_{iter}.png')
-    renderer.composite(fullpath, arr, ncol=1)
+    if False: # if you want to save rollout image
+        fullpath = join(args.savepath, f'rollout_{iter}.png')
+        renderer.composite(fullpath, arr, ncol=1)
     
     
     ##################################################start statistics calculation
@@ -210,7 +253,8 @@ for iter in range(1, TOTAL_TEST_ITER+1):   # num of testing runs
     safe2_batch.append(safe2_val)
     score_batch.append(score)
     iter_time_batch.append(iter_time)
-    cbf_warn_batch.append(cbf_warn)
+    c_smooth_batch.append(c_smooth.item())
+    s_smooth_batch.append(s_smooth.item())
     ##################################################end statistics calculation
 
     # logger.finish(t, env.max_episode_steps, score=score, value=0)
@@ -221,19 +265,20 @@ for iter in range(1, TOTAL_TEST_ITER+1):   # num of testing runs
     itertime_val = float(iter_time[0])
     success_val  = 1 if reward > 0.95 else 0
 
-    # append mode to write one line to csv file
-    with open(csv_path, 'a', newline='') as csv_file:
-        writer = csv.writer(csv_file)
-        writer.writerow([
-            iter,
-            safe1_val,
-            safe2_val,
-            is_trap1,
-            is_trap2,
-            score_val,
-            itertime_val,
-            success_val
-        ])
+    # for time saving skip it
+    # append mode to write one line to csv file 
+    # with open(csv_path, 'a', newline='') as csv_file: 
+    #     writer = csv.writer(csv_file)
+    #     writer.writerow([
+    #         iter,
+    #         safe1_val,
+    #         safe2_val,
+    #         is_trap1,
+    #         is_trap2,
+    #         score_val,
+    #         itertime_val,
+    #         success_val
+    #     ])
     ##################################################end per-iter statistics calculation
 
 # --------------------------------- statistics calculation ----------------------------------#
@@ -243,18 +288,19 @@ iter_time_avg = np.mean(iter_time_batch, axis=0)
 
 # pdb.set_trace()
 print("======================results======================")
-elbo_batch = np.array(elbo_batch)
-print("elbo mean: ", np.mean(elbo_batch))
-print("elbo std: ", np.std(elbo_batch))
+# elbo_batch = np.array(elbo_batch)
+# print("elbo mean: ", np.mean(elbo_batch))
+# print("elbo std: ", np.std(elbo_batch))
 
 score_batch = np.array(score_batch)
 print(f"safe1: min: {np.min(safe1_batch):.4f}/ {np.mean(safe1_batch):.4f} ± {np.std(safe1_batch):.4f}")
 print(f"safe2: min: {np.min(safe2_batch):.4f}/ {np.mean(safe2_batch):.4f} ± {np.std(safe2_batch):.4f}")
 print(f"trap1: {num_trap1} / {TOTAL_TEST_ITER}")
 print(f"trap2: {num_trap2} / {TOTAL_TEST_ITER}")
+print(f"c-smooth: {np.mean(c_smooth_batch):.4f} ± {np.std(c_smooth_batch):.4f}")
+print(f"s-smooth: {np.mean(s_smooth_batch):.4f} ± {np.std(s_smooth_batch):.4f}")
 print(f"score: {np.mean(score_batch):.5f} ± {np.std(score_batch):.5f}")
 print(f"avg iter time: {iter_time_avg[0]}")
-print(f"avg cbf warn: {np.mean(cbf_warn_batch):.1f}/384 ± {np.std(cbf_warn_batch):.1f}")
 print(f"number of success: {num_success} / {TOTAL_TEST_ITER}")
 print("=======================end=========================")
 
@@ -301,6 +347,12 @@ try:
             'safe2_std': float(np.std(safe2_batch)),
             'safe1_min': float(np.min(safe1_batch)),
             'safe2_min': float(np.min(safe2_batch))
+        },
+        'smooth_stats': {
+            'c_smooth_mean': float(np.mean(c_smooth_batch)),
+            's_smooth_mean': float(np.mean(s_smooth_batch)),
+            'c_smooth_std': float(np.std(c_smooth_batch)),
+            's_smooth_std': float(np.std(s_smooth_batch)),
         },
         'score_stats': {
             'mean': float(np.mean(score_batch)),
