@@ -82,9 +82,9 @@ class CFM(nn.Module):
         self.register_buffer('posterior_log_variance_clipped',
             torch.log(torch.clamp(posterior_variance, min=1e-20)))
         self.register_buffer('posterior_mean_coef1',
-            betas * np.sqrt(alphas_cumprod_prev) / (1. - alphas_cumprod))
+            betas * torch.sqrt(alphas_cumprod_prev) / (1. - alphas_cumprod))
         self.register_buffer('posterior_mean_coef2',
-            (1. - alphas_cumprod_prev) * np.sqrt(alphas) / (1. - alphas_cumprod))
+            (1. - alphas_cumprod_prev) * torch.sqrt(alphas) / (1. - alphas_cumprod))
 
     def get_loss_weights(self, action_weight, discount, weights_dict):
         '''
@@ -199,15 +199,18 @@ class CFM(nn.Module):
         """
         Solve ODE planning with explicit control-corrected RHS (e.g., CBF applied)
         """
-        OSI_start = time.time()
         n_timesteps = self.n_timesteps
         pred_n_timesteps = 1  # number of prediction steps
+        p_time = 0.0
         # ================ Prediction Stage ================
         if self.one_shot_enabled:
             batch_size = len(cond[0])
             x0_1st_phase = torch.randn(shape).to(self.device)
             x0_1st_phase = apply_conditioning(x0_1st_phase, cond, self.action_dim)
-            
+            # for fixing time
+            _ = self.model(x0_1st_phase, None, torch.full((batch_size,), 0, device=x0_1st_phase.device))
+            t_time_start = time.time()
+            p_time_start = time.time()
             pred_time_list = torch.linspace(0, 1, pred_n_timesteps+1).to(self.device)
             for i in range(pred_n_timesteps):
                 t_now = pred_time_list[i]
@@ -216,11 +219,11 @@ class CFM(nn.Module):
                 x0_1st_phase = x0_1st_phase + v_t * dt
                 x0_1st_phase = apply_conditioning(x0_1st_phase, cond, self.action_dim)
             x0_2nd_phase = x0_1st_phase
+            p_time_end = time.time()
+            p_time += (p_time_end - p_time_start)
         # ================ Correction Stage ================
         else:
             x0_2nd_phase = torch.randn(shape).to(self.device)
-        OSI_end = time.time()
-        OSI_time = OSI_end - OSI_start
 
         x0_2nd_phase = apply_conditioning(x0_2nd_phase, cond, self.action_dim)
 
@@ -234,13 +237,14 @@ class CFM(nn.Module):
         
         traj = [x0_2nd_phase]
         
-        iter_time = 0
-        alpha =  2*(n_timesteps+1) / n_timesteps  # for scaling one-shot init velocity
+        alpha = 2*(n_timesteps+1) / (n_timesteps)  # for scaling one-shot init velocity
+        c_time = 0
         for i in range(1, T):
             iter_start = time.time()
             # print(f"{i}-th iter / {T} (time: {t_act1 - t_start:.2f}s)", end="\r")
             t_now = time_list[i-1]
             # define dt based on scheduling
+            c_time_start = time.time()
             if self.one_shot_enabled:
                 dt = 1/ n_timesteps
                 one_minus_t = (n_timesteps - (i-1))/(n_timesteps)
@@ -264,15 +268,14 @@ class CFM(nn.Module):
 
             x_next = x_now + dx
             x_next = apply_conditioning(x_next, cond, self.action_dim)
-
+            c_time_end = time.time()
+            c_time += (c_time_end - c_time_start)
             traj.append(x_next)
-            iter_end = time.time()
-            iter_time += (iter_end - iter_start)
-
+        t_time_end = time.time()
         traj_tensor = torch.stack(traj, dim=1)  # [T, B, H, D]
-
+        print(f"p: {p_time:.6f}s, c: {(c_time/4)-p_time:.6f}s")
         if record_traj:
-            return traj_tensor[:,T-1,:,:], traj_tensor, [iter_time/n_timesteps]  # sample, diffusion_paths, avg_iter_time
+            return traj_tensor[:,T-1,:,:], traj_tensor, [(p_time+c_time)]#[t_time_end-t_time_start] # sample, diffusion_paths, avg_iter_time
         else:
             return traj_tensor[:,T-1,:,:]               # just sample
 
@@ -286,7 +289,7 @@ class CFM(nn.Module):
         horizon = horizon or self.horizon
         shape = (batch_size, horizon, self.transition_dim)
         
-        if self.safety_enabled: # Planning
+        if True: # Planning
             return self.p_sample_loop_ode_planning(shape, cond, record_traj=record_traj, *args, **kwargs)
         else:
             return self.p_sample_loop(shape, cond, record_traj=record_traj, *args, **kwargs) # Training

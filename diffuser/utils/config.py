@@ -64,6 +64,6 @@ class Config(collections.Mapping):
 
     def __call__(self, *args, **kwargs):
         instance = self._class(*args, **kwargs, **self._dict)
-        if self._device:
+        if self._device and hasattr(instance, 'to'):
             instance = instance.to(self._device)
         return instance

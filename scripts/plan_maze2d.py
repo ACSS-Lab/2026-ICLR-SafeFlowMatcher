@@ -39,11 +39,15 @@ class Parser(utils.Parser):
 
 args = Parser().parse_args('plan')
 
+utils.set_device(args.device)
+
 env = datasets.load_environment(args.dataset)
 
 #---------------------------------- loading ----------------------------------#
 
-diffusion_experiment = utils.load_diffusion(args.logbase, args.dataset, args.diffusion_loadpath, epoch=args.diffusion_epoch)
+diffusion_experiment = utils.load_diffusion(
+    args.logbase, args.dataset, args.diffusion_loadpath, epoch=args.diffusion_epoch, device=args.device
+)
 
 diffusion = diffusion_experiment.ema
 dataset = diffusion_experiment.dataset
@@ -83,7 +87,7 @@ c_smooth_batch, s_smooth_batch = [], []
 num_success = 0
 iter_time_batch = []
 
-TOTAL_TEST_ITER = 1
+TOTAL_TEST_ITER = 100
 for iter in range(1, TOTAL_TEST_ITER+1):   # num of testing runs
     print("Total test iteration: ", iter, f"/{TOTAL_TEST_ITER}")
 
@@ -106,7 +110,6 @@ for iter in range(1, TOTAL_TEST_ITER+1):   # num of testing runs
 
     total_reward = 0
     env_step = env.max_episode_steps
-    # env_step = 384 #env.max_episode_steps # real need is 384 because the plan horizon is only 384
     for t in range(env_step):
 
         state = env.state_vector().copy()

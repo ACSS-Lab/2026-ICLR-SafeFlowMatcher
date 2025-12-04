@@ -2,6 +2,7 @@ import os
 import pickle
 import glob
 import torch
+from .arrays import set_device
 import pdb
 
 from collections import namedtuple
@@ -33,12 +34,19 @@ def load_config(*loadpath):
     print(config)
     return config
 
-def load_diffusion(*loadpath, epoch='latest', device='cuda:0'):
+def load_diffusion(*loadpath, epoch='latest', device='cuda'):
     dataset_config = load_config(*loadpath, 'dataset_config.pkl')
     render_config = load_config(*loadpath, 'render_config.pkl')
     model_config = load_config(*loadpath, 'model_config.pkl')
     diffusion_config = load_config(*loadpath, 'diffusion_config.pkl')
     trainer_config = load_config(*loadpath, 'trainer_config.pkl')
+
+    # 강제 device 설정이 들어오면 저장된 설정을 덮어씁니다.
+    if device is not None:
+        set_device(device)
+        for cfg in (dataset_config, render_config, model_config, diffusion_config, trainer_config):
+            if hasattr(cfg, '_device'):
+                cfg._device = device
 
     ## remove absolute path for results loaded from azure
     ## @TODO : remove results folder from within trainer class

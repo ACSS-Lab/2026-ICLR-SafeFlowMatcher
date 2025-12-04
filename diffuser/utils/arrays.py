@@ -84,6 +84,7 @@ def to_img(x):
     return (array * 255).astype(np.uint8)
 
 def set_device(device):
+	global DEVICE
 	DEVICE = device
 	if 'cuda' in device:
 		torch.set_default_tensor_type(torch.cuda.FloatTensor)
