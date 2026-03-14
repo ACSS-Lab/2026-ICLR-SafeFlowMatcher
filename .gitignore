@@ -57,3 +57,5 @@ _garbage/
 
 # But allow project page assets
 !docs/static/images/*.png
+!docs/static/videos/*.mp4
+!docs/static/videos/*.gif

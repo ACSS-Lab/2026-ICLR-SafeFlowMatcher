@@ -19,7 +19,7 @@ Korea Advanced Institute of Science and Technology (KAIST)
      Can reuse the problem_definition.png from the paper or create a cleaner version.
 -->
 <p align="center">
-  <img src="docs/static/images/problem_definition.png" width="60%">
+  <img src="https://raw.githubusercontent.com/takahashi-seiryu/SafeFlowMatcher/main/docs/static/images/problem_definition.png" width="60%">
 </p>
 
 <p align="center">
@@ -58,6 +58,21 @@ Korea Advanced Institute of Science and Technology (KAIST)
 | Hopper | SafeDiffuser | 0.464±0.028 | Yes |
 | Hopper | SafeFM | 0.675±0.312 | Yes |
 | Hopper | **SafeFlowMatcher (Ours)** | **0.917±0.026** | **Yes** |
+
+### Trajectory Generation Examples
+
+<p align="center">
+  <img src="docs/static/videos/loco.gif" width="65%" alt="Locomotion (Walker2D / Hopper)"><br>
+  <em>Locomotion (Walker2D / Hopper)</em>
+</p>
+<p align="center">
+  <img src="docs/static/videos/maze.gif" width="28%" alt="Maze2D Navigation">
+  &nbsp;&nbsp;&nbsp;
+  <img src="docs/static/videos/kuka.gif" width="28%" alt="Kuka Manipulation">
+</p>
+<p align="center">
+  <em>Left:</em> Maze2D Navigation &nbsp;&nbsp;&nbsp;&nbsp; <em>Right:</em> Kuka Manipulation
+</p>
 
 ---
 
