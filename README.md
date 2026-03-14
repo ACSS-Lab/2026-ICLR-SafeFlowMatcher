@@ -159,11 +159,13 @@ SafeFlowMatcher/
 If you find this work useful, please cite our paper:
 
 ```bibtex
-@inproceedings{yang2026safeflowmatcher,
-  title={SafeFlowMatcher: Safe and Fast Planning using Flow Matching with Control Barrier Functions},
-  author={Yang, Jeongyong and Jang, Seunghwan and Han, SooJean},
-  booktitle={International Conference on Learning Representations (ICLR)},
-  year={2026}
+@inproceedings{
+yang2026safeflowmatcher,
+title={SafeFlowMatcher: Safe and Fast Planning using Flow Matching with Control Barrier Functions},
+author={Jeongyong Yang and Seunghwan Jang and SooJean Han},
+booktitle={The Fourteenth International Conference on Learning Representations},
+year={2026},
+url={https://openreview.net/forum?id=refcXHU1Nh}
 }
 ```
 
