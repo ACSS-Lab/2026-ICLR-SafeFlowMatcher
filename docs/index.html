@@ -62,124 +62,167 @@
   </div>
 </section>
 
-<!-- Teaser: Overview (left) + Trajectory Generation (right) -->
+<!-- Summary -->
 <section class="section">
   <div class="container">
-    <div style="display:grid; grid-template-columns:1fr 1fr; gap:32px; align-items:start; max-width:1100px; margin:0 auto;">
-      <!-- Left: Overview -->
-      <div>
-        <div class="teaser" style="text-align:center;">
-          <img src="static/images/problem_definition.png" alt="SafeFlowMatcher overview" style="max-width:100%; border-radius:8px;">
-          <p class="caption">
-            <b>Overview of SafeFlowMatcher versus existing certification-based methods.</b>
-            Directly constraining intermediate samples during generation (top) can cause paths to be distorted or trapped,
-            whereas SafeFlowMatcher (bottom) decouples generation and certification via a prediction&ndash;correction integrator,
-            producing a complete and certified-safe path.
-          </p>
-        </div>
+    <h2 class="section-title">Summary</h2>
+    <div style="margin:0 auto 32px;">
+      <div style="text-align:center;">
+        <img src="static/images/problem_definition.png" alt="SafeFlowMatcher overview" style="max-width:70%; border-radius:8px;">
       </div>
-      <!-- Right: Trajectory Generation -->
-      <div>
-        <h3 class="subsection-title no-underline" style="margin-top:0;">Trajectory Generation</h3>
-        <div style="text-align:center;">
-          <video autoplay loop muted playsinline style="width:90%; border-radius:8px;">
-            <source src="static/videos/loco.mp4" type="video/mp4">
-          </video>
-          <p class="caption">Locomotion (Hopper)</p>
-        </div>
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px;">
-          <div style="text-align:center;">
-            <video autoplay loop muted playsinline style="max-width:100%; border-radius:8px;">
-              <source src="static/videos/maze.mp4" type="video/mp4">
-            </video>
-            <p class="caption">Maze2D Navigation</p>
-          </div>
-          <div style="text-align:center;">
-            <video autoplay loop muted playsinline style="max-width:100%; border-radius:8px;">
-              <source src="static/videos/kuka.mp4" type="video/mp4">
-            </video>
-            <p class="caption">Kuka Manipulation</p>
-          </div>
-        </div>
-      </div>
+      <p class="caption caption-left">
+        <b>Overview of SafeFlowMatcher versus existing certification-based methods.</b>
+        Directly constraining intermediate samples during generation (top) can cause paths to be distorted or trapped,
+        whereas SafeFlowMatcher (bottom) decouples generation and certification via a prediction&ndash;correction integrator,
+        producing a complete and certified-safe path.
+      </p>
+    </div>
+    <div class="abstract caption-left">
+      <p>
+        <strong>Problem.</strong> Flow matching (FM) planners generate high-quality paths in very few ODE steps, but provide no formal safety guarantees and can produce incomplete paths near constraints.
+      </p>
+      <p>
+        <strong>Method.</strong> <em>SafeFlowMatcher</em> couples FM with control barrier functions (CBFs) via a two-phase <em>prediction&ndash;correction</em> integrator:
+        <br>(i) <em>Predict</em> &mdash; run the learned FM one or a few steps to get a candidate path;
+        <br>(ii) <em>Correct</em> &mdash; refine the path using a vanishing time-scaled vector field and a CBF quadratic program that applies the minimum perturbation needed to restore safety.
+      </p>
+      <p>
+        <strong>Key insight.</strong> Safety is enforced only on the <em>executed</em> path, not on every intermediate latent sample &mdash; eliminating distributional drift and local trap problems that affect prior methods.
+      </p>
+      <p>
+        <strong>Results.</strong> SafeFlowMatcher produces faster, smoother, and safer paths than diffusion- and FM-based baselines across maze navigation, locomotion, and robot manipulation tasks. We also prove a barrier certificate guaranteeing forward invariance of a robust safe set and finite-time convergence to safety.
+      </p>
     </div>
   </div>
 </section>
 
-<!-- Abstract -->
+<!-- Problem -->
 <section class="section alt-bg">
   <div class="container">
-    <h2 class="section-title">Abstract</h2>
-    <div class="abstract">
+    <h2 class="section-title">Problem</h2>
+    <div class="abstract caption-left" style="margin-bottom:28px;">
       <p>
-        Generative planners based on flow matching (FM) produce high-quality paths in a single or a few ODE steps,
-        but their sampling dynamics offer no formal safety guarantees and can yield incomplete paths near constraints.
-        We present <b>SafeFlowMatcher</b>, a planning framework that couples FM with control barrier functions (CBFs)
-        to achieve <em>both</em> real-time efficiency and certified safety.
-      </p>
-      <p>
-        SafeFlowMatcher uses a two-phase <em>prediction&ndash;correction</em> (PC) integrator:
-        (i) a <b>prediction phase</b> integrates the learned FM once (or a few steps) to obtain a candidate path without intervention;
-        (ii) a <b>correction phase</b> refines this path with a vanishing time-scaled vector field and a CBF-based quadratic program
-        that minimally perturbs the vector field.
-        We prove a barrier certificate for the resulting flow system, establishing forward invariance of a robust safe set
-        and finite-time convergence to the safe set.
-      </p>
-      <p>
-        By enforcing safety only on the executed path&mdash;rather than all intermediate latent paths&mdash;SafeFlowMatcher
-        avoids distributional drift and mitigates local trap problems.
-        Moreover, SafeFlowMatcher attains faster, smoother, and safer paths than diffusion- and FM-based baselines
-        on maze navigation, locomotion, and robot manipulation tasks.
-        Extensive ablations corroborate the contributions of the PC integrator and the barrier certificate.
+        Existing generative planners either ignore safety constraints entirely, producing paths that violate them, or enforce safety on every intermediate sample during generation, causing local traps—paths to get stuck near constraints.
       </p>
     </div>
+    <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:16px; align-items:start;">
+      <div style="text-align:center;">
+        <video id="maze-vid-1" loop muted playsinline style="width:100%; border-radius:8px;">
+          <source src="static/videos/maze_diffuser.mp4" type="video/mp4">
+        </video>
+        <p class="caption">Diffuser</p>
+      </div>
+      <div style="text-align:center;">
+        <video id="maze-vid-2" loop muted playsinline style="width:100%; border-radius:8px;">
+          <source src="static/videos/maze_cg.mp4" type="video/mp4">
+        </video>
+        <p class="caption">Diffuser w/ CFG</p>
+      </div>
+      <div style="text-align:center;">
+        <video id="maze-vid-3" loop muted playsinline style="width:100%; border-radius:8px;">
+          <source src="static/videos/maze_safediffuser.mp4" type="video/mp4">
+        </video>
+        <p class="caption">SafeDiffuser</p>
+      </div>
+      <div style="text-align:center;">
+        <video id="maze-vid-4" loop muted playsinline style="width:100%; border-radius:8px;">
+          <source src="static/videos/maze.mp4" type="video/mp4">
+        </video>
+        <p class="caption"><b>SafeFlowMatcher (Ours)</b></p>
+      </div>
+    </div>
+    <p class="caption caption-left" style="margin-top:16px;">
+      <b>Maze2D Navigation.</b> Diffuser produces unsafe paths; Diffuser w/ CFG and SafeDiffuser get trapped or yield incomplete paths near constraints; SafeFlowMatcher generates complete, certified-safe paths.
+    </p>
   </div>
 </section>
 
 <!-- Method -->
-<section class="section">
+<section class="section alt-bg">
   <div class="container">
     <h2 class="section-title">Method</h2>
-    <div class="method">
-      <!-- [PLACEHOLDER] Replace with a dedicated method diagram (e.g., draw.io / Figma)
-           Suggested content: A two-row diagram showing:
-           Row 1 (Prediction Phase): noise -> FM ODE integration -> candidate path tau_1^p
-           Row 2 (Correction Phase): tau_1^p -> vanishing time-scaled flow + CBF-QP -> safe path tau_1^c
-           Include: barrier function contours, safe set boundary, QP annotation
-      -->
-      <div class="placeholder-figure" id="method-placeholder" style="display:none;">
-        <p>[PLACEHOLDER: Method overview diagram]<br>
-        Need a clean diagram showing the prediction-correction pipeline.<br>
-        Suggested tool: draw.io or Figma. Export as static/images/method_overview.png</p>
-      </div>
-      <img src="static/images/gen_process_SDvsSFM.png" alt="Generation process comparison" style="max-width:100%; border-radius:8px; box-shadow: 0 2px 12px rgba(0,0,0,0.08);">
-      <p class="caption">
-        <b>Comparison of path generation processes.</b>
-        (Top) RES-SafeDiffuser initializes samples all over the maze and converges to a path with local traps.
-        (Bottom) SafeFlowMatcher (ours) initializes from near the target path after the prediction phase,
-        and converges to a higher-quality path with no local traps.
+    <div class="abstract caption-left" style="margin-bottom:32px;">
+      <p>
+        SafeFlowMatcher decouples <em>generation</em> from <em>safety certification</em> via a two-phase <em>Prediction&ndash;Correction</em> (PC) integrator. The prediction phase runs the learned FM dynamics freely to produce a candidate path; the correction phase then applies a vanishing time-scaled vector field with a CBF-QP that minimally adjusts velocities to enforce safety.
       </p>
     </div>
 
-    <!-- Key Idea -->
-    <div class="abstract" style="margin-top: 32px;">
-      <h3 class="subsection-title">Key Idea: Prediction&ndash;Correction Integrator</h3>
+    <!-- Pipeline with phase labels -->
+    <div style="max-width:960px; margin:0 auto 24px;">
+      <!-- Phase labels row -->
+      <div style="display:grid; grid-template-columns:1fr auto 1fr auto 1fr auto 1fr; gap:8px; margin-bottom:6px;">
+        <!-- Phase 1 spans col 1+2+3 -->
+        <div style="grid-column:1/4; background:#dbeafe; border-radius:6px; text-align:center; padding:4px 0; font-size:0.85rem; font-weight:600; color:#1d4ed8;">
+          Phase 1 &mdash; <em>Predict</em>
+        </div>
+        <div></div>
+        <!-- Phase 2 spans col 5+6+7 -->
+        <div style="grid-column:5/8; background:#dcfce7; border-radius:6px; text-align:center; padding:4px 0; font-size:0.85rem; font-weight:600; color:#15803d;">
+          Phase 2 &mdash; <em>Correct</em>
+        </div>
+      </div>
+      <!-- Pipeline items row -->
+      <div style="display:grid; grid-template-columns:1fr auto 1fr auto 1fr auto 1fr; gap:8px; align-items:center;">
+        <!-- Noise -->
+        <div style="text-align:center;">
+          <img src="static/images/noise.png" alt="Noise path" style="width:100%; border-radius:8px;">
+          <p class="caption" style="margin-top:8px;">Noise Path<br><small>$\tau_0^p \sim \mathcal{N}(0,I)$</small></p>
+        </div>
+        <div style="text-align:center; font-size:1.6rem; color:#555;">&rarr;</div>
+        <!-- Candidate -->
+        <div style="text-align:center;">
+          <img src="static/images/candidate.png" alt="Candidate path" style="width:100%; border-radius:8px;">
+          <p class="caption" style="margin-top:8px;">Candidate Path<br><small>$\tau_1^p = \Psi_{0\to1}^{(T^p)}(\tau_0^p)$</small></p>
+        </div>
+        <div style="text-align:center; font-size:1.6rem; color:#555;">&rarr;</div>
+        <!-- Correction (video) -->
+        <div style="text-align:center;">
+          <video autoplay loop muted playsinline style="width:100%; border-radius:8px;">
+            <source src="static/videos/intermediate.mp4" type="video/mp4">
+          </video>
+          <p class="caption" style="margin-top:8px;">Correcting<br><small>VTFD + CBF-QP</small></p>
+        </div>
+        <div style="text-align:center; font-size:1.6rem; color:#555;">&rarr;</div>
+        <!-- Final -->
+        <div style="text-align:center;">
+          <img src="static/images/final.png" alt="Final path" style="width:100%; border-radius:8px;">
+          <p class="caption" style="margin-top:8px;">Final Path<br><small>$\tau_1^c \approx \tau_1^\star$</small></p>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:24px; max-width:960px; margin:0 auto;">
+      <div style="background:#f8f8f8; border-radius:10px; padding:20px 24px;">
+        <h3 style="margin:0 0 8px; font-size:1rem;">Phase 1 &mdash; <em>Predict</em></h3>
+        <p style="margin:0; font-size:0.93rem; line-height:1.6;">
+          Integrate the nominal FM vector field $v_t(\tau_t;\theta)$ from noise for $T^p = 1$ step (or a few). This yields a candidate path $\tau_1^p$ close to the target distribution.
+        </p>
+      </div>
+      <div style="background:#f8f8f8; border-radius:10px; padding:20px 24px;">
+        <h3 style="margin:0 0 8px; font-size:1rem;">Phase 2 &mdash; <em>Correct</em></h3>
+        <p style="margin:0; font-size:0.93rem; line-height:1.6;">
+          Refine the candidate path using vanishing time-scaled flow dynamics (VTFD), $\alpha(1-t)v_t {+} \Delta u_t$, where $\Delta u_t$ is solved by a CBF-QP that applies the minimum perturbation needed to keep each waypoint in the safe set over $T^c = 256$ steps.
+        </p>
+      </div>
+    </div>
+
+    <div class="abstract caption-left" style="margin-top:24px;">
       <p>
-        <b>Phase 1 &mdash; Prediction:</b> Sample noise $\boldsymbol{\tau}_0^p \sim \mathcal{N}(0, I)$ and integrate the learned flow matching ODE in a single (or a few) Euler step(s) to obtain a candidate path $\boldsymbol{\tau}_1^p$, <em>without</em> any safety intervention. This preserves the native FM dynamics and avoids distributional drift.
-      </p>
-      <p>
-        <b>Phase 2 &mdash; Correction:</b> Starting from $\boldsymbol{\tau}_0^c = \boldsymbol{\tau}_1^p$, refine the path using <em>vanishing time-scaled flow dynamics</em> (VTFD) $\dot{\boldsymbol{\tau}}_t^c = \alpha(1-t) v_t(\boldsymbol{\tau}_t^c; \theta)$ combined with a CBF-based quadratic program that minimally perturbs the velocity field to guarantee forward invariance and finite-time convergence to the safe set.
+        <strong>Guarantee.</strong> The correction phase provably maintains forward invariance of a safe set and drives any unsafe waypoints back to safety in finite time without imposing constraints on intermediate latent samples, which avoids distributional drift and local traps.
       </p>
     </div>
   </div>
 </section>
 
-<!-- Results -->
+<!-- Main Results -->
 <section class="section alt-bg">
   <div class="container">
-    <h2 class="section-title">Results</h2>
-
-    <h3 class="subsection-title no-underline">Maze2D Navigation</h3>
+    <h2 class="section-title">Maze2D Navigation Results</h2>
+    <div class="abstract caption-left" style="margin-bottom:28px;">
+      <p>
+        We evaluate SafeFlowMatcher on the Maze2D navigation benchmark against diffusion- and FM-based baselines. SafeFlowMatcher achieves the highest task score with zero trap rate, while all safety constraints (BS &ge; 0) are satisfied.
+      </p>
+    </div>
 
     <!-- Quantitative Results Table -->
     <div class="table-wrapper">
@@ -249,9 +292,28 @@
     <p class="caption">
       SafeFlowMatcher achieves the highest score with zero trap rate and guaranteed safety (BS &ge; 0), evaluated over 100 independent trials.
     </p>
+    <div style="text-align:center; max-width:760px; margin:28px auto 0;">
+      <img src="static/images/gen_process_SDvsSFM.png" alt="Generation process comparison" style="max-width:100%; border-radius:8px; box-shadow: 0 2px 12px rgba(0,0,0,0.08);">
+      <p class="caption caption-left">
+        <b>Comparison of path generation processes.</b>
+        (Top) RES-SafeDiffuser initializes samples all over the maze and converges to a path with local traps.
+        (Bottom) SafeFlowMatcher (ours) initializes from near the target path after the prediction phase,
+        and converges to a higher-quality path with no local traps.
+      </p>
+    </div>
+  </div>
+</section>
 
-    <h3 class="subsection-title no-underline">High-Dimensional Robotic Tasks</h3>
-    <div class="table-wrapper">
+<!-- High-dimensional Robotic Task Results -->
+<section class="section">
+  <div class="container">
+    <h2 class="section-title">High-dimensional Robotic Task Results</h2>
+    <div class="abstract caption-left" style="margin-bottom:28px;">
+      <p>
+        SafeFlowMatcher generalizes to high-dimensional robotic tasks beyond navigation. On locomotion and manipulation benchmarks, it consistently achieves higher task scores than diffusion- and FM-based baselines while maintaining certified safety.
+      </p>
+    </div>
+    <div class="table-wrapper" style="margin-bottom:32px;">
       <table>
         <thead>
           <tr>
@@ -319,468 +381,23 @@
     <p class="caption">
       <b>Performance on high-dimensional robotic tasks.</b> SafeFlowMatcher maintains its advantages in both locomotion and robot manipulation settings.
     </p>
-  </div>
-</section>
-
-<!-- How It Works -->
-<section class="section">
-  <div class="container">
-    <h2 class="section-title">How It Works</h2>
-
-    <!-- Subsection 1: Safety Guarantee -->
-    <h3 class="subsection-title">Safety Guarantee: Forward Invariance in Continuous-Time Flow</h3>
-    <!-- Interactive CBF-QP Demo -->
-    <div style="text-align:center; max-width:640px; margin:0 auto 24px;">
-      <canvas id="cbf-canvas" width="600" height="420" style="border:1px solid #e2e8f0; border-radius:8px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); cursor:crosshair; max-width:100%;"></canvas>
-      <p class="caption" style="margin-top:8px;"><b>Interactive CBF-QP visualization.</b> Drag the velocity endpoint (hollow circle) to see how the CBF-QP corrects unsafe velocities. When $\tilde{v}_t^k$ points into the unsafe region, the QP computes a minimum-norm correction $\Delta \mathbf{u}_t^k$.</p>
-    </div>
-    <script>
-    (function(){
-      const canvas = document.getElementById('cbf-canvas');
-      const ctx = canvas.getContext('2d');
-      const W = canvas.width, H = canvas.height;
-
-      const obs = { x: 360, y: 200, r: 90 };
-      const tau = { x: 180, y: 220 };
-      let vEnd = { x: 370, y: 190 };
-      let dragging = false;
-      let overlayVisible = true; // initial overlay state
-
-      function dist(a, b) { return Math.sqrt((a.x-b.x)**2 + (a.y-b.y)**2); }
-      function isInsideUnsafe(p) { return dist(p, obs) < obs.r; }
-
-      function projectOnBoundary(p) {
-        const dx = p.x - obs.x, dy = p.y - obs.y;
-        const d = Math.sqrt(dx*dx + dy*dy);
-        if (d < 1e-6) return { x: obs.x + obs.r, y: obs.y };
-        return { x: obs.x + obs.r * dx / d, y: obs.y + obs.r * dy / d };
-      }
-
-      function drawArrow(x0, y0, x1, y1, color, lineWidth, dashed) {
-        const dx = x1-x0, dy = y1-y0;
-        const len = Math.sqrt(dx*dx + dy*dy);
-        if (len < 2) return;
-        const headLen = Math.min(12, len*0.3);
-        const angle = Math.atan2(dy, dx);
-        ctx.save();
-        ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = lineWidth;
-        if (dashed) ctx.setLineDash([6,4]); else ctx.setLineDash([]);
-        ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.beginPath(); ctx.moveTo(x1, y1);
-        ctx.lineTo(x1 - headLen*Math.cos(angle-0.35), y1 - headLen*Math.sin(angle-0.35));
-        ctx.lineTo(x1 - headLen*Math.cos(angle+0.35), y1 - headLen*Math.sin(angle+0.35));
-        ctx.closePath(); ctx.fill();
-        ctx.restore();
-      }
-
-      // --- Math label renderer with proper sub/superscripts ---
-      // Parses simple patterns: base_sub^sup, e.g. "u_t^k", "ṽ_t^k"
-      // Renders base at normal size, subscript below-right, superscript above-right
-      function drawMathLabel(parts, x, y, color, baseFontSize) {
-        ctx.save();
-        ctx.fillStyle = color;
-        ctx.textBaseline = 'middle';
-        let cx = x;
-        for (const part of parts) {
-          if (typeof part === 'string') {
-            // plain text
-            ctx.font = baseFontSize + 'px "Segoe UI", Arial, sans-serif';
-            ctx.fillText(part, cx, y);
-            cx += ctx.measureText(part).width;
-          } else {
-            // { base, sub, sup }
-            const subSize = Math.round(baseFontSize * 0.7);
-            ctx.font = 'italic ' + baseFontSize + 'px "Segoe UI", Arial, sans-serif';
-            ctx.fillText(part.base, cx, y);
-            cx += ctx.measureText(part.base).width + 1;
-            const stackX = cx;
-            if (part.sub) {
-              ctx.font = subSize + 'px "Segoe UI", Arial, sans-serif';
-              ctx.fillText(part.sub, stackX, y + baseFontSize * 0.35);
-              cx = Math.max(cx, stackX + ctx.measureText(part.sub).width);
-            }
-            if (part.sup) {
-              ctx.font = subSize + 'px "Segoe UI", Arial, sans-serif';
-              ctx.fillText(part.sup, stackX, y - baseFontSize * 0.35);
-              cx = Math.max(cx, stackX + ctx.measureText(part.sup).width);
-            }
-            cx += 1;
-          }
-        }
-        ctx.restore();
-        return cx - x; // return total width
-      }
-
-      function drawPlainLabel(text, x, y, color, fontSize) {
-        ctx.save();
-        ctx.font = (fontSize||12)+'px "Segoe UI", Arial, sans-serif';
-        ctx.fillStyle = color; ctx.textAlign = 'left';
-        ctx.fillText(text, x, y);
-        ctx.restore();
-      }
-
-      // Smart label placement: offset perpendicular to arrow direction
-      // side: 1 = left/above, -1 = right/below (relative to arrow direction)
-      function getLabelPos(x0, y0, x1, y1, t, perpDist, side) {
-        const mx = x0 + (x1 - x0) * t;
-        const my = y0 + (y1 - y0) * t;
-        const dx = x1 - x0, dy = y1 - y0;
-        const len = Math.sqrt(dx*dx + dy*dy);
-        if (len < 1) return { x: mx, y: my };
-        // perpendicular: (-dy, dx) normalized
-        const nx = -dy / len * side * perpDist;
-        const ny = dx / len * side * perpDist;
-        return { x: mx + nx, y: my + ny };
-      }
-
-      function draw() {
-        ctx.clearRect(0, 0, W, H);
-
-        // Background
-        ctx.fillStyle = '#fafbfc';
-        ctx.fillRect(0, 0, W, H);
-
-        // Grid
-        ctx.strokeStyle = '#f0f0f0'; ctx.lineWidth = 0.5;
-        for (let gx = 0; gx < W; gx += 30) { ctx.beginPath(); ctx.moveTo(gx,0); ctx.lineTo(gx,H); ctx.stroke(); }
-        for (let gy = 0; gy < H; gy += 30) { ctx.beginPath(); ctx.moveTo(0,gy); ctx.lineTo(W,gy); ctx.stroke(); }
-
-        // Safe region label
-        drawPlainLabel('Safe region (b(x) \u2265 0)', 20, 25, '#16a34a', 13);
-
-        // Unsafe set
-        ctx.save();
-        ctx.beginPath(); ctx.arc(obs.x, obs.y, obs.r, 0, Math.PI*2);
-        ctx.fillStyle = 'rgba(220, 38, 38, 0.12)'; ctx.fill();
-        ctx.strokeStyle = '#dc2626'; ctx.lineWidth = 2.5; ctx.stroke();
-        ctx.restore();
-        drawPlainLabel('Unsafe (b < 0)', obs.x - 42, obs.y + 5, '#dc2626', 12);
-
-        // Barrier boundary label
-        ctx.save();
-        ctx.font = '10px "Segoe UI", Arial, sans-serif';
-        ctx.fillStyle = '#dc2626'; ctx.textAlign = 'center';
-        ctx.fillText('\u2202C: b(x) = 0', obs.x, obs.y - obs.r - 8);
-        ctx.restore();
-
-        const unsafe = isInsideUnsafe(vEnd);
-
-        if (unsafe) {
-          const uStar = projectOnBoundary(vEnd);
-
-          // Compute perpendicular sides so labels don't overlap
-          // For the red arrow (tau→vEnd) and green arrow (tau→uStar):
-          // Place red label on one side, green label on the other
-          const redDx = vEnd.x - tau.x, redDy = vEnd.y - tau.y;
-          const greenDx = uStar.x - tau.x, greenDy = uStar.y - tau.y;
-          // Cross product to determine which side green is relative to red
-          const cross = redDx * greenDy - redDy * greenDx;
-          // Label goes same side as arrow: upper arrow → label above, lower → below
-          const redSide = cross >= 0 ? -1 : 1;
-          const greenSide = -redSide;
-
-          // 1) ṽ_t^k (red arrow, unsafe)
-          drawArrow(tau.x, tau.y, vEnd.x, vEnd.y, '#dc2626', 2.5, false);
-          const redLbl = getLabelPos(tau.x, tau.y, vEnd.x, vEnd.y, 0.45, 12, redSide);
-          drawMathLabel([{base:'\u1e7d', sub:'t', sup:'k'}], redLbl.x, redLbl.y, '#dc2626', 14);
-
-          // 2) Δu_t^k (dashed blue)
-          drawArrow(vEnd.x, vEnd.y, uStar.x, uStar.y, '#2563eb', 2, true);
-          const blueDx = uStar.x - vEnd.x, blueDy = uStar.y - vEnd.y;
-          // place blue label perpendicular to the blue arrow
-          const blueLen = Math.sqrt(blueDx*blueDx + blueDy*blueDy);
-          const blueLbl = getLabelPos(vEnd.x, vEnd.y, uStar.x, uStar.y, 0.5, 12, 1);
-          drawMathLabel(['\u0394', {base:'u', sub:'t', sup:'k'}], blueLbl.x, blueLbl.y, '#2563eb', 13);
-
-          // 3) u_t^{k*} (green arrow from tau)
-          drawArrow(tau.x, tau.y, uStar.x, uStar.y, '#16a34a', 2.5, false);
-          const greenLbl = getLabelPos(tau.x, tau.y, uStar.x, uStar.y, 0.55, 12, greenSide);
-          drawMathLabel([{base:'u', sub:'t', sup:'k'}], greenLbl.x, greenLbl.y, '#16a34a', 14);
-
-          // u* endpoint dot
-          ctx.beginPath(); ctx.arc(uStar.x, uStar.y, 5, 0, Math.PI*2);
-          ctx.fillStyle = '#16a34a'; ctx.fill();
-          ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.stroke();
-
-          // Status
-          drawPlainLabel('\u26a0 Unsafe velocity \u2192 CBF correction applied', 20, H - 15, '#dc2626', 12);
-          drawPlainLabel('u*= \u1e7d + \u0394u  (minimum-norm projection onto safe half-space)', 20, H - 35, '#475569', 11);
-        } else {
-          drawArrow(tau.x, tau.y, vEnd.x, vEnd.y, '#16a34a', 2.5, false);
-          const safeLbl = getLabelPos(tau.x, tau.y, vEnd.x, vEnd.y, 0.45, 12, 1);
-          drawMathLabel([{base:'\u1e7d', sub:'t', sup:'k'}, ' = ', {base:'u', sub:'t', sup:'k'}], safeLbl.x, safeLbl.y, '#16a34a', 14);
-
-          drawPlainLabel('\u2713 Safe velocity \u2192 no correction needed (\u0394u = 0)', 20, H - 15, '#16a34a', 12);
-        }
-
-        // Starting point tau
-        ctx.beginPath(); ctx.arc(tau.x, tau.y, 7, 0, Math.PI*2);
-        ctx.fillStyle = '#1e293b'; ctx.fill();
-        ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.stroke();
-        // τ_t^{c,k}
-        drawMathLabel([{base:'\u03c4', sub:'t', sup:'c,k'}], tau.x - 40, tau.y + 2, '#1e293b', 13);
-
-        // Draggable endpoint (hollow circle)
-        ctx.beginPath(); ctx.arc(vEnd.x, vEnd.y, 8, 0, Math.PI*2);
-        ctx.fillStyle = unsafe ? 'rgba(220,38,38,0.2)' : 'rgba(22,163,106,0.2)';
-        ctx.fill();
-        ctx.strokeStyle = unsafe ? '#dc2626' : '#16a34a';
-        ctx.lineWidth = 2.5; ctx.stroke();
-
-        // Instruction text: larger, bold, darker gray, underline
-        ctx.save();
-        const instrText = '\u2195 Drag the hollow circle to explore CBF correction';
-        ctx.font = 'bold 13px "Segoe UI", Arial, sans-serif';
-        ctx.fillStyle = '#64748b';
-        ctx.textAlign = 'left';
-        ctx.fillText(instrText, 20, H - 55);
-        // Underline
-        const tw = ctx.measureText(instrText).width;
-        ctx.strokeStyle = '#64748b'; ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(20, H - 52); ctx.lineTo(20 + tw, H - 52); ctx.stroke();
-        ctx.restore();
-
-        // Initial overlay
-        if (overlayVisible) {
-          ctx.save();
-          ctx.fillStyle = 'rgba(255, 255, 255, 0.82)';
-          ctx.fillRect(0, 0, W, H);
-          // Sky-blue bold text
-          ctx.font = 'bold 22px "Segoe UI", Arial, sans-serif';
-          ctx.fillStyle = '#0ea5e9';
-          ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-          ctx.fillText('\u2195 Drag the hollow circle to interact', W/2, H/2 - 14);
-          ctx.font = '14px "Segoe UI", Arial, sans-serif';
-          ctx.fillStyle = '#64748b';
-          ctx.fillText('See how CBF guarantees forward invariance (safety)', W/2, H/2 + 18);
-          ctx.restore();
-        }
-      }
-
-      function dismissOverlay() {
-        if (overlayVisible) { overlayVisible = false; draw(); }
-      }
-
-      function getMousePos(e) {
-        const rect = canvas.getBoundingClientRect();
-        return { x: (e.clientX - rect.left) * W / rect.width, y: (e.clientY - rect.top) * H / rect.height };
-      }
-      function getTouchPos(e) {
-        const rect = canvas.getBoundingClientRect();
-        const t = e.touches[0];
-        return { x: (t.clientX - rect.left) * W / rect.width, y: (t.clientY - rect.top) * H / rect.height };
-      }
-
-      canvas.addEventListener('mousedown', function(e) {
-        dismissOverlay();
-        const p = getMousePos(e);
-        if (dist(p, vEnd) < 20) dragging = true;
-      });
-      canvas.addEventListener('mousemove', function(e) {
-        if (!dragging) return;
-        const p = getMousePos(e);
-        vEnd.x = Math.max(10, Math.min(W-10, p.x));
-        vEnd.y = Math.max(10, Math.min(H-10, p.y));
-        draw();
-      });
-      canvas.addEventListener('mouseup', function() { dragging = false; });
-      canvas.addEventListener('mouseleave', function() { dragging = false; });
-
-      canvas.addEventListener('touchstart', function(e) {
-        dismissOverlay();
-        const p = getTouchPos(e);
-        if (dist(p, vEnd) < 30) { dragging = true; e.preventDefault(); }
-      }, {passive:false});
-      canvas.addEventListener('touchmove', function(e) {
-        if (!dragging) return; e.preventDefault();
-        const p = getTouchPos(e);
-        vEnd.x = Math.max(10, Math.min(W-10, p.x));
-        vEnd.y = Math.max(10, Math.min(H-10, p.y));
-        draw();
-      }, {passive:false});
-      canvas.addEventListener('touchend', function() { dragging = false; });
-
-      draw();
-    })();
-    </script>
-    <div class="abstract">
-      <p>
-        The core challenge is: how can we certify safety in continuous-time flow matching dynamics?
-        SafeFlowMatcher formalizes safety through <em>finite-time flow invariance</em> using continuous-time control barrier functions (CBFs).
-      </p>
-      <p>
-        <b>Notation.</b>
-        Let $\boldsymbol{\tau}_t^c \in \mathcal{D}^{H+1} \subseteq \mathbb{R}^{d \times (H+1)}$ be the path at time $t$ during the correction phase,
-        where $H$ is the planning horizon and each waypoint $\boldsymbol{\tau}_t^{c,k} \in \mathcal{D} \subseteq \mathbb{R}^d$ for $k \in \mathcal{H} = \{0, \ldots, H\}$.
-        Define a $C^1$ barrier function $b : \mathcal{D} \to \mathbb{R}$ and the <em>robust safe set</em>
-        $\mathcal{C}_\delta = \{ \boldsymbol{\tau}^{c,k} \in \mathcal{D} \mid b(\boldsymbol{\tau}^{c,k}) \geq \delta \}$ for robustness margin $\delta > 0$.
-      </p>
-      <p>
-        During the correction phase, the flow dynamics are augmented with a minimal safety perturbation $\Delta \mathbf{u}_t$:
-        $$\frac{d\boldsymbol{\tau}_t^{c,k}}{dt} = \tilde{v}_t^k(\boldsymbol{\tau}_t^c;\theta) + \Delta \mathbf{u}_t^k \triangleq \mathbf{u}_t^k,$$
-        where $\tilde{v}_t^k$ is the vanishing time-scaled flow (defined in Phase 2 below). The perturbation $\Delta \mathbf{u}_t^k$ is chosen to be the <em>minimum-norm</em> correction that satisfies a barrier certificate, via a per-waypoint quadratic program (CBF-QP):
-        $$\mathbf{u}_t^{k*}, r_t^{k*} = \arg\min_{\mathbf{u}_t^k, r_t^k} \| \mathbf{u}_t^k - \tilde{v}_t^k \|^2 + {r_t^k}^2 \quad \text{s.t.} \quad \nabla b(\boldsymbol{\tau}_t^{c,k})^\top \mathbf{u}_t^k + \epsilon \cdot \text{sgn}(b - \delta) |b - \delta|^\rho + w_t^k r_t^k \geq 0.$$
-      </p>
-      <p>
-        <b>Theorem 1 (Forward Invariance).</b>
-        If the barrier certificate above is satisfied for all $k \in \mathcal{H}$ and $t \in [0,1]$ with $0 < \rho < 1$, $\epsilon > 0$,
-        then the flow system achieves <em>finite-time flow invariance</em> on $\mathcal{C}_\delta$&mdash;i.e., there exists $t_f \in [0,1]$ such that $b(\boldsymbol{\tau}_t^{c,k}) \geq \delta$ for all $k$ and $t \geq t_f$.
-      </p>
-      <p>
-        <b>Proposition 1 (Finite Convergence Time).</b>
-        For any initial waypoint $\boldsymbol{\tau}_{t_w}^{c,k} \in \mathcal{D} \setminus \mathcal{C}_\delta$, convergence to $\mathcal{C}_\delta$ is guaranteed within
-        $T \leq t_w + \frac{(\delta - b(\boldsymbol{\tau}_{t_w}^{c,k}))^{1-\rho}}{\epsilon(1-\rho)}$,
-        providing an explicit bound on the correction time needed for safety.
-      </p>
-    </div>
-
-    <!-- Subsection 2: Prediction Phase -->
-    <h3 class="subsection-title">Phase 1 &mdash; Prediction: One-Step Initialization</h3>
-    <div class="abstract">
-      <p>
-        The prediction phase generates a candidate path from pure noise <em>without</em> any safety intervention,
-        preserving the native flow matching dynamics. Starting from $\boldsymbol{\tau}_0^p \sim \mathcal{N}(0, I)$,
-        we run $T^p$ Euler steps to obtain:
-        $$\boldsymbol{\tau}_1^p = \Psi^{(T^p)}_{0 \to 1}(\boldsymbol{\tau}_0^p) = \boldsymbol{\tau}_1^\star + \varepsilon,$$
-        where $\boldsymbol{\tau}_1^\star$ is the exact FM solution and $\varepsilon$ is the Euler discretization error.
-        The key insight is that a <em>single step</em> ($T^p = 1$) already places $\boldsymbol{\tau}_1^p$ sufficiently close to $\boldsymbol{\tau}_1^\star$
-        to serve as a good initialization for the correction phase.
-      </p>
-      <p>
-        <b>Theoretical backing (Lemma 1).</b>
-        Under the assumption that the prediction error $\varepsilon$ follows a <em>symmetric, zero-mean</em> distribution with locally strongly convex negative log-density
-        (i.e., $-\log p_\varepsilon$ is $C^2$ with positive-definite Hessian $A \succ 0$ near $\varepsilon = 0$),
-        the posterior expectation contracts toward the target:
-        $\mathbb{E}[\boldsymbol{\tau}_1 \mid \boldsymbol{\tau}_t^c] = \boldsymbol{\tau}_1^\star + O(1-t)$.
-        This guarantees that the correction phase can effectively refine the predicted path, as the posterior concentrates in an $O(1-t)$ neighborhood of the true target as $t \to 1$.
-      </p>
-    </div>
-
-    <h4 style="font-size:1rem; font-weight:600; color:#444; margin:24px 0 12px; text-align:center;">Prediction NFE ($T^p$) Allocation</h4>
-    <div class="abstract" style="margin-bottom:16px;">
-      <p>
-        We ablate the number of function evaluations allocated to prediction ($T^p$) vs. correction ($T^c$).
-        A single-step prediction ($T^p{=}1$) already suffices to initialize the corrector effectively and matches the performance of substantially larger $T^p$ (e.g., $16$).
-        We therefore adopt $T^p{=}1$ as the default, balancing performance and compute.
-      </p>
-    </div>
-    <div class="table-wrapper" style="max-width:500px;">
-      <table>
-        <thead>
-          <tr>
-            <th>$T^p$</th>
-            <th>1</th>
-            <th>2</th>
-            <th>4</th>
-            <th>8</th>
-            <th>16</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr class="highlight-row">
-            <td><b>Score &uarr;</b></td>
-            <td><b style="color:#dc2626;">1.632&pm;0.008</b></td>
-            <td>1.520&pm;0.340</td>
-            <td>1.468&pm;0.434</td>
-            <td>1.362&pm;0.480</td>
-            <td><b style="color:#dc2626;">1.632&pm;0.003</b></td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-    <div style="text-align:center; max-width:700px; margin:16px auto;">
-      <img src="static/images/p_NFE.png" alt="Predicted path quality vs T^p" style="max-width:100%; border-radius:8px; box-shadow: 0 2px 12px rgba(0,0,0,0.08);">
-      <p class="caption"><b>Predicted path quality vs $T^p$.</b> A single-step prediction already provides a good initialization for the corrector.</p>
-    </div>
-
-    <h4 style="font-size:1rem; font-weight:600; color:#444; margin:32px 0 12px; text-align:center;">Empirical Validation of the Prediction Error Assumption</h4>
-    <div class="abstract" style="margin-bottom:16px;">
-      <p>
-        We verify the symmetric zero-mean assumption on $\varepsilon$ by evaluating 1,000 predicted paths (384,000 total waypoints) for each $T^p \in \{1, 2, 4, 8, 16, 32\}$ in Maze2D.
-        The error distribution is compared against a high-accuracy reference solution computed via Dormand&ndash;Prince 5(4) with 256 steps.
-        Across all $T^p$ values, the distribution of $\varepsilon$ remains centered at zero and exhibits clear symmetry, directly supporting the Gaussian-like assumption of Lemma 1.
-      </p>
-    </div>
-    <div style="text-align:center; max-width:700px; margin:16px auto;">
-      <img src="static/images/epsilon_viz.png" alt="Empirical distribution of prediction error" style="max-width:75%; border-radius:8px; box-shadow: 0 2px 12px rgba(0,0,0,0.08);">
-      <p class="caption"><b>Empirical distribution of the prediction error $\varepsilon$ over $T^p$.</b> Across all values, $\varepsilon$ remains centered at zero with clear symmetry, validating the Gaussian-like assumption of Lemma 1.</p>
-    </div>
-
-    <!-- Subsection 3: Correction Phase -->
-    <h3 class="subsection-title">Phase 2 &mdash; Correction: Safe Refinement via VTFD</h3>
-    <div class="abstract">
-      <p>
-        The correction phase starts from $\boldsymbol{\tau}_0^c = \boldsymbol{\tau}_1^p$ (the predicted path) and refines it
-        by (i) reducing the discretization error $\varepsilon$ and (ii) enforcing safety constraints.
-        To achieve error reduction, we introduce <em>vanishing time-scaled flow dynamics</em> (VTFD):
-        $$\frac{d\boldsymbol{\tau}_t^c}{dt} = \alpha(1-t) \, v_t(\boldsymbol{\tau}_t^c; \theta) \triangleq \tilde{v}_t(\boldsymbol{\tau}_t^c; \theta),$$
-        where the factor $(1-t)$ gradually suppresses the vector field as $t \to 1$ with scaling constant $\alpha > 0$.
-        This produces a contraction effect: the path is driven toward the target in early correction steps,
-        while the dynamics become increasingly stable near $t = 1$, preventing drift.
-      </p>
-      <p>
-        <b>Lemma 2 (VTFD Error Reduction).</b>
-        Under the assumptions of Lemma 1, let $\mathbf{e}_t = \boldsymbol{\tau}_t^c - \boldsymbol{\tau}_1^\star$.
-        If the dynamics follow VTFD, then as $t \to 1$:
-        $$\mathbf{e}_t = O((1-t)^2) + (\varepsilon + O(1)) e^{-\alpha t}.$$
-        The error decays exponentially with rate $\alpha$, while the polynomial term $O((1-t)^2)$ vanishes as $t \to 1$.
-        This formally guarantees that VTFD reduces the prediction error of $\boldsymbol{\tau}_1^c$.
-      </p>
-      <p>
-        Safety is then enforced by augmenting the VTFD dynamics with the CBF-QP perturbation $\Delta \mathbf{u}_t$ (as described above in the Safety Guarantee section),
-        which minimally perturbs the vanishing time-scaled velocity field to maintain forward invariance of the robust safe set $\mathcal{C}_\delta$.
-      </p>
-    </div>
-
-    <h4 style="font-size:1rem; font-weight:600; color:#444; margin:24px 0 12px; text-align:center;">Vanishing Scaling Constant ($\alpha$)</h4>
-    <div class="abstract" style="margin-bottom:16px;">
-      <p>
-        We sweep the scaling constant $\alpha$ in VTFD to empirically validate its role.
-        Moderate scaling ($\alpha{=}2$) yields the best trade-off: larger $\alpha$ accelerates early convergence
-        but can over-amplify the vector field and reduce stability, while smaller $\alpha$ cannot effectively reduce error.
-      </p>
-    </div>
-    <div class="table-wrapper" style="max-width:500px;">
-      <table>
-        <thead>
-          <tr>
-            <th>$\alpha$</th>
-            <th>1.0</th>
-            <th>1.5</th>
-            <th>2.0</th>
-            <th>2.5</th>
-            <th>3.0</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr class="highlight-row">
-            <td><b>Score &uarr;</b></td>
-            <td>1.623&pm;0.005</td>
-            <td>1.629&pm;0.004</td>
-            <td><b style="color:#dc2626;">1.632&pm;0.008</b></td>
-            <td>1.618&pm;0.033</td>
-            <td>1.572&pm;0.058</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-    <div style="text-align:center; max-width:700px; margin:16px auto;">
-      <img src="static/images/path_over_alpha.png" alt="Generated paths under different alpha" style="max-width:100%; border-radius:8px; box-shadow: 0 2px 12px rgba(0,0,0,0.08);">
-      <p class="caption"><b>Generated paths under different scaling constant $\alpha$.</b> As $\alpha$ increases, the path becomes smoother but can be distorted beyond a critical value ($\alpha \approx 2$).</p>
-    </div>
-    <div class="results-grid" style="margin-top:16px;">
+    <div style="display:flex; flex-direction:column; gap:32px; max-width:560px; margin:32px auto 0;">
       <div style="text-align:center;">
-        <img src="static/images/damping_graph.png" alt="Score with and without vanishing time-scale" style="max-width:100%; border-radius:8px; box-shadow: 0 2px 12px rgba(0,0,0,0.08);">
-        <p class="caption"><b>Score with and without vanishing time-scale.</b> As sampling steps increase, the score decreases in the absence of VTFD.</p>
+        <video autoplay loop muted playsinline style="width:100%; border-radius:8px;">
+          <source src="static/videos/loco.mp4" type="video/mp4">
+        </video>
+        <p class="caption" style="margin-top:0;">Locomotion (Hopper)</p>
       </div>
       <div style="text-align:center;">
-        <img src="static/images/damping_traj.png" alt="Vanishing time-scale path comparison" style="max-width:100%; border-radius:8px; box-shadow: 0 2px 12px rgba(0,0,0,0.08);">
-        <p class="caption"><b>Path quality with (a) and without (b) vanishing time-scale.</b> Without VTFD, the path exhibits a sharp drift near $t{=}1$.</p>
+        <video autoplay loop muted playsinline style="width:100%; border-radius:8px;">
+          <source src="static/videos/kuka.mp4" type="video/mp4">
+        </video>
+        <p class="caption">Kuka Manipulation</p>
       </div>
     </div>
   </div>
 </section>
+
 
 <!-- Video (for ICLR virtual presentation) -->
 <!-- [PLACEHOLDER] Uncomment and add YouTube video ID after recording presentation -->
@@ -846,6 +463,19 @@ url={https://openreview.net/forum?id=refcXHU1Nh}
 </footer>
 
 <script>
+// Sync maze comparison videos
+(function() {
+  const ids = ['maze-vid-1', 'maze-vid-2', 'maze-vid-3', 'maze-vid-4'];
+  const videos = ids.map(id => document.getElementById(id));
+  const ready = videos.map(v => new Promise(resolve => {
+    if (v.readyState >= 3) resolve();
+    else v.addEventListener('canplaythrough', resolve, { once: true });
+  }));
+  Promise.all(ready).then(() => {
+    videos.forEach(v => { v.currentTime = 0; v.play(); });
+  });
+})();
+
 function copyBibtex() {
   const text = document.getElementById('bibtex').innerText;
   navigator.clipboard.writeText(text).then(() => {
