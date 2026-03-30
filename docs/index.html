@@ -105,27 +105,32 @@
         Existing generative planners either ignore safety constraints entirely, producing paths that violate them, or enforce safety on every intermediate sample during generation, causing local traps—paths to get stuck near constraints.
       </p>
     </div>
-    <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:16px; align-items:start;">
+    <div id="maze-player" style="position:relative; display:grid; grid-template-columns:repeat(4,1fr); gap:16px; align-items:start; cursor:pointer;">
+      <div id="maze-play-overlay" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; z-index:2; pointer-events:none;">
+        <div style="width:64px; height:64px; background:rgba(0,0,0,0.55); border-radius:50%; display:flex; align-items:center; justify-content:center;">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="white"><polygon points="6,3 20,12 6,21"/></svg>
+        </div>
+      </div>
       <div style="text-align:center;">
-        <video id="maze-vid-1" autoplay loop muted playsinline style="width:100%; border-radius:8px;">
+        <video id="maze-vid-1" muted playsinline preload="auto" style="width:100%; border-radius:8px;">
           <source src="static/videos/maze_diffuser.mp4" type="video/mp4">
         </video>
         <p class="caption">Diffuser</p>
       </div>
       <div style="text-align:center;">
-        <video id="maze-vid-2" autoplay loop muted playsinline style="width:100%; border-radius:8px;">
+        <video id="maze-vid-2" muted playsinline preload="auto" style="width:100%; border-radius:8px;">
           <source src="static/videos/maze_cg.mp4" type="video/mp4">
         </video>
         <p class="caption">Diffuser w/ CFG</p>
       </div>
       <div style="text-align:center;">
-        <video id="maze-vid-3" autoplay loop muted playsinline style="width:100%; border-radius:8px;">
+        <video id="maze-vid-3" muted playsinline preload="auto" style="width:100%; border-radius:8px;">
           <source src="static/videos/maze_safediffuser.mp4" type="video/mp4">
         </video>
         <p class="caption">SafeDiffuser</p>
       </div>
       <div style="text-align:center;">
-        <video id="maze-vid-4" autoplay loop muted playsinline style="width:100%; border-radius:8px;">
+        <video id="maze-vid-4" muted playsinline preload="auto" style="width:100%; border-radius:8px;">
           <source src="static/videos/maze.mp4" type="video/mp4">
         </video>
         <p class="caption"><b>SafeFlowMatcher (Ours)</b></p>
@@ -463,16 +468,41 @@ url={https://openreview.net/forum?id=refcXHU1Nh}
 </footer>
 
 <script>
-// Sync maze comparison videos
+// Maze comparison: click to play once, synchronized
 (function() {
   const ids = ['maze-vid-1', 'maze-vid-2', 'maze-vid-3', 'maze-vid-4'];
   const videos = ids.map(id => document.getElementById(id));
-  const ready = videos.map(v => new Promise(resolve => {
-    if (v.readyState >= 3) resolve();
-    else v.addEventListener('canplaythrough', resolve, { once: true });
-  }));
-  Promise.all(ready).then(() => {
-    videos.forEach(v => { v.currentTime = 0; v.play(); });
+  const player = document.getElementById('maze-player');
+  const overlay = document.getElementById('maze-play-overlay');
+  let playing = false;
+
+  // Preload and seek to last frame for preview
+  videos.forEach(v => {
+    v.load();
+    v.addEventListener('loadedmetadata', () => { v.currentTime = v.duration; }, { once: true });
+  });
+
+  player.addEventListener('click', function() {
+    if (playing) return;
+    playing = true;
+    overlay.style.display = 'none';
+
+    // Wait until all are ready, then play together
+    Promise.all(videos.map(v => new Promise(resolve => {
+      if (v.readyState >= 3) return resolve();
+      v.addEventListener('canplaythrough', resolve, { once: true });
+    }))).then(() => {
+      videos.forEach(v => { v.currentTime = 0; v.play(); });
+    });
+
+    // When the longest video ends, show the overlay again
+    const onEnded = () => {
+      if (videos.every(v => v.ended || v.paused)) {
+        playing = false;
+        overlay.style.display = 'flex';
+      }
+    };
+    videos.forEach(v => v.addEventListener('ended', onEnded));
   });
 })();
 
