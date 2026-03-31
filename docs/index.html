@@ -105,7 +105,7 @@
         Existing generative planners either ignore safety constraints entirely, producing paths that violate them, or enforce safety on every intermediate sample during generation, causing local traps—paths to get stuck near constraints.
       </p>
     </div>
-    <div id="maze-player" style="position:relative; display:grid; grid-template-columns:repeat(4,1fr); gap:16px; align-items:start; cursor:pointer;">
+    <div id="maze-player" class="maze-grid" style="position:relative; cursor:pointer;">
       <div id="maze-play-overlay" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; z-index:2; pointer-events:none;">
         <div style="width:64px; height:64px; background:rgba(0,0,0,0.55); border-radius:50%; display:flex; align-items:center; justify-content:center;">
           <svg width="28" height="28" viewBox="0 0 24 24" fill="white"><polygon points="6,3 20,12 6,21"/></svg>
@@ -153,61 +153,58 @@
     </div>
 
     <!-- Pipeline with phase labels -->
-    <div style="max-width:960px; margin:0 auto 24px;">
-      <!-- Phase labels row -->
-      <div style="display:grid; grid-template-columns:1fr auto 1fr auto 1fr auto 1fr; gap:8px; margin-bottom:6px;">
-        <!-- Phase 1 spans col 1+2+3 -->
-        <div style="grid-column:1/4; background:#dbeafe; border-radius:6px; text-align:center; padding:4px 0; font-size:0.85rem; font-weight:600; color:#1d4ed8;">
+    <div class="method-pipeline" style="max-width:960px; margin:0 auto 24px;">
+      <!-- Phase 1: Predict -->
+      <div class="method-phase method-phase1">
+        <div style="background:#dbeafe; border-radius:6px; text-align:center; padding:4px 0; font-size:0.85rem; font-weight:600; color:#1d4ed8; margin-bottom:6px;">
           Phase 1 &mdash; <em>Predict</em>
         </div>
-        <div></div>
-        <!-- Phase 2 spans col 5+6+7 -->
-        <div style="grid-column:5/8; background:#dcfce7; border-radius:6px; text-align:center; padding:4px 0; font-size:0.85rem; font-weight:600; color:#15803d;">
+        <div class="method-phase-items">
+          <div style="text-align:center;">
+            <img src="static/images/noise.png" alt="Noise path" style="width:100%; border-radius:8px;">
+            <p class="caption" style="margin-top:8px;">Noise Path<br><small>$\tau_0^p \sim \mathcal{N}(0,I)$</small></p>
+          </div>
+          <div style="text-align:center; font-size:1.6rem; color:#555;">&rarr;</div>
+          <div style="text-align:center;">
+            <img src="static/images/candidate.png" alt="Candidate path" style="width:100%; border-radius:8px;">
+            <p class="caption" style="margin-top:8px;">Candidate Path<br><small>$\tau_1^p = \Psi_{0\to1}^{(T^p)}(\tau_0^p)$</small></p>
+          </div>
+        </div>
+        <div style="background:#f8f8f8; border-radius:10px; padding:20px 24px; margin-top:12px;">
+          <h3 style="margin:0 0 8px; font-size:1rem;">Phase 1 &mdash; <em>Predict</em></h3>
+          <p style="margin:0; font-size:0.93rem; line-height:1.6;">
+            Integrate the nominal FM vector field $v_t(\tau_t;\theta)$ from noise for $T^p = 1$ step (or a few). This yields a candidate path $\tau_1^p$ close to the target distribution.
+          </p>
+        </div>
+      </div>
+
+      <!-- Arrow between phases -->
+      <div class="method-phase-arrow" style="text-align:center; font-size:1.6rem; color:#555;">&rarr;</div>
+
+      <!-- Phase 2: Correct -->
+      <div class="method-phase method-phase2">
+        <div style="background:#dcfce7; border-radius:6px; text-align:center; padding:4px 0; font-size:0.85rem; font-weight:600; color:#15803d; margin-bottom:6px;">
           Phase 2 &mdash; <em>Correct</em>
         </div>
-      </div>
-      <!-- Pipeline items row -->
-      <div style="display:grid; grid-template-columns:1fr auto 1fr auto 1fr auto 1fr; gap:8px; align-items:center;">
-        <!-- Noise -->
-        <div style="text-align:center;">
-          <img src="static/images/noise.png" alt="Noise path" style="width:100%; border-radius:8px;">
-          <p class="caption" style="margin-top:8px;">Noise Path<br><small>$\tau_0^p \sim \mathcal{N}(0,I)$</small></p>
+        <div class="method-phase-items">
+          <div style="text-align:center;">
+            <video autoplay loop muted playsinline preload="auto" style="width:100%; border-radius:8px;">
+              <source src="static/videos/intermediate.mp4" type="video/mp4">
+            </video>
+            <p class="caption" style="margin-top:8px;">Correcting<br><small>VTFD + CBF-QP</small></p>
+          </div>
+          <div style="text-align:center; font-size:1.6rem; color:#555;">&rarr;</div>
+          <div style="text-align:center;">
+            <img src="static/images/final.png" alt="Final path" style="width:100%; border-radius:8px;">
+            <p class="caption" style="margin-top:8px;">Final Path<br><small>$\tau_1^c \approx \tau_1^\star$</small></p>
+          </div>
         </div>
-        <div style="text-align:center; font-size:1.6rem; color:#555;">&rarr;</div>
-        <!-- Candidate -->
-        <div style="text-align:center;">
-          <img src="static/images/candidate.png" alt="Candidate path" style="width:100%; border-radius:8px;">
-          <p class="caption" style="margin-top:8px;">Candidate Path<br><small>$\tau_1^p = \Psi_{0\to1}^{(T^p)}(\tau_0^p)$</small></p>
+        <div style="background:#f8f8f8; border-radius:10px; padding:20px 24px; margin-top:12px;">
+          <h3 style="margin:0 0 8px; font-size:1rem;">Phase 2 &mdash; <em>Correct</em></h3>
+          <p style="margin:0; font-size:0.93rem; line-height:1.6;">
+            Refine the candidate path using vanishing time-scaled flow dynamics (VTFD), $\alpha(1-t)v_t {+} \Delta u_t$, where $\Delta u_t$ is solved by a CBF-QP that applies the minimum perturbation needed to keep each waypoint in the safe set over $T^c = 256$ steps.
+          </p>
         </div>
-        <div style="text-align:center; font-size:1.6rem; color:#555;">&rarr;</div>
-        <!-- Correction (video) -->
-        <div style="text-align:center;">
-          <video autoplay loop muted playsinline preload="auto" style="width:100%; border-radius:8px;">
-            <source src="static/videos/intermediate.mp4" type="video/mp4">
-          </video>
-          <p class="caption" style="margin-top:8px;">Correcting<br><small>VTFD + CBF-QP</small></p>
-        </div>
-        <div style="text-align:center; font-size:1.6rem; color:#555;">&rarr;</div>
-        <!-- Final -->
-        <div style="text-align:center;">
-          <img src="static/images/final.png" alt="Final path" style="width:100%; border-radius:8px;">
-          <p class="caption" style="margin-top:8px;">Final Path<br><small>$\tau_1^c \approx \tau_1^\star$</small></p>
-        </div>
-      </div>
-    </div>
-
-    <div style="display:grid; grid-template-columns:1fr 1fr; gap:24px; max-width:960px; margin:0 auto;">
-      <div style="background:#f8f8f8; border-radius:10px; padding:20px 24px;">
-        <h3 style="margin:0 0 8px; font-size:1rem;">Phase 1 &mdash; <em>Predict</em></h3>
-        <p style="margin:0; font-size:0.93rem; line-height:1.6;">
-          Integrate the nominal FM vector field $v_t(\tau_t;\theta)$ from noise for $T^p = 1$ step (or a few). This yields a candidate path $\tau_1^p$ close to the target distribution.
-        </p>
-      </div>
-      <div style="background:#f8f8f8; border-radius:10px; padding:20px 24px;">
-        <h3 style="margin:0 0 8px; font-size:1rem;">Phase 2 &mdash; <em>Correct</em></h3>
-        <p style="margin:0; font-size:0.93rem; line-height:1.6;">
-          Refine the candidate path using vanishing time-scaled flow dynamics (VTFD), $\alpha(1-t)v_t {+} \Delta u_t$, where $\Delta u_t$ is solved by a CBF-QP that applies the minimum perturbation needed to keep each waypoint in the safe set over $T^c = 256$ steps.
-        </p>
       </div>
     </div>
 
