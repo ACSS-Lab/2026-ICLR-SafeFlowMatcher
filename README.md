@@ -4,7 +4,7 @@
 
 **ICLR 2026**
 
-[Jeongyong Yang](https://github.com/takahashi-seiryu)\*, [Seunghwan Jang](https://github.com/Jang-seunghwan)\*†, SooJean Han
+[Jeongyong Yang](https://takahashi-seiryu.github.io/)\*, [Seunghwan Jang](https://jang-seunghwan.github.io/)\*†, [SooJean Han](https://soojean.github.io/)†
 
 Korea Advanced Institute of Science and Technology (KAIST)
 
